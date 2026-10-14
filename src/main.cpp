@@ -73,6 +73,12 @@ static void writeConfig(const std::string& path, const Options& o, const Scene& 
     std::fprintf(f, "  \"light\": {\"position\": [%g, %g, %g], \"color\": [%g, %g, %g], \"falloff\": \"none\"},\n",
                  scene.light.pos.x, scene.light.pos.y, scene.light.pos.z, scene.light.color.x, scene.light.color.y, scene.light.color.z);
     std::fprintf(f, "  \"ambient\": [%g, %g, %g],\n", scene.ambient.x, scene.ambient.y, scene.ambient.z);
+    if (scene.area.valid) {
+        const AreaLight& al = scene.area;
+        std::fprintf(f, "  \"area_light\": {\"center\": [%g, %g, %g], \"edge_u\": [%g, %g, %g], \"edge_v\": [%g, %g, %g], \"normal\": [%g, %g, %g], \"area\": %g, \"radiance\": %g, \"used_for_shading\": false},\n",
+                     al.center.x, al.center.y, al.center.z, al.edgeU.x, al.edgeU.y, al.edgeU.z, al.edgeV.x, al.edgeV.y, al.edgeV.z,
+                     al.normal.x, al.normal.y, al.normal.z, al.area, al.radiance);
+    }
     std::fprintf(f, "  \"camera\": {\"from_file\": %s, \"position\": [%g, %g, %g], \"forward\": [%g, %g, %g], \"tan_half_fov_y\": %g},\n",
                  scene.camera.valid ? "true" : "false", cam.pos.x, cam.pos.y, cam.pos.z,
                  cam.forward.x, cam.forward.y, cam.forward.z, cam.tanHalfFov);

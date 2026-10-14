@@ -240,6 +240,26 @@ TEST(glb_room_scene_loads_with_camera_and_spheres_in_place) {
     CHECK_NEAR(h.p.x, 0.0, 1e-3);
 }
 
+TEST(glb_area_light_is_read_from_node_extras) {
+    for (const char* name : {"Untitled.glb", "Room_2Spheres.glb"}) {
+        Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/" + name);
+        const AreaLight& a = sc.area;
+        CHECK(a.valid);
+        CHECK_NEAR(a.center.x, -4.0, 1e-4); CHECK_NEAR(a.center.y, 5.0, 1e-4); CHECK_NEAR(a.center.z, 2.0, 1e-4);  // Blender (-4, -2, 5)
+        CHECK_NEAR(length(a.edgeU), 2.0, 1e-4); CHECK_NEAR(length(a.edgeV), 2.0, 1e-4);                           // rt_size_x/y = 2 m
+        CHECK_NEAR(a.area, 4.0, 1e-4);
+        CHECK_NEAR(a.radiance, 15.0, 1e-5);
+        CHECK_NEAR(length(a.normal), 1.0, 1e-5);
+        CHECK_NEAR(dot(a.edgeU, a.normal), 0.0, 1e-4); CHECK_NEAR(dot(a.edgeV, a.normal), 0.0, 1e-4);              // rectangle is perpendicular to its normal
+        CHECK_NEAR(dot(a.edgeU, a.edgeV), 0.0, 1e-4);
+        // Emission direction as Blender reports it for this light, (0.6667, 0.3333, -0.6667) Z-up -> (x, z, -y) Y-up.
+        CHECK_NEAR(a.normal.x, 0.6667, 1e-3); CHECK_NEAR(a.normal.y, -0.6667, 1e-3); CHECK_NEAR(a.normal.z, -0.3333, 1e-3);
+        CHECK(dot(a.normal, Vec3(0, 1, 0) - a.center) > 0);       // it faces the middle of the room
+        applyDefaultLighting(sc);
+        CHECK_NEAR(sc.light.pos.x, a.center.x, 1e-6);             // step 1: shading still uses a point light at the centre
+    }
+}
+
 int main() {
     for (auto& c : tests()) {
         int before = g_failed;

@@ -9,12 +9,13 @@
   "display": {"exposure": 1, "gamma": 2.2, "tone_mapping": "none (clamp)"},
   "light": {"position": [-4, 5, 2], "color": [1, 1, 1], "falloff": "none"},
   "ambient": [0.12, 0.12, 0.12],
+  "area_light": {"center": [-4, 5, 2], "edge_u": [0.894427, 0, 1.78885], "edge_v": [1.19257, 1.49071, -0.596285], "normal": [0.666667, -0.666667, -0.333333], "area": 4, "radiance": 15, "used_for_shading": false},
   "camera": {"from_file": true, "position": [0, 2.2, 6.8], "forward": [0, -0.173785, -0.984784], "tan_half_fov_y": 0.642857},
   "triangles": 11916,
   "materials": 9,
   "bvh_nodes": 8191,
   "build": "release (NDEBUG)",
   "compiler": "Apple LLVM 21.0.0 (clang-2100.3.34.2)",
-  "timing_ms": {"load_and_bvh": 13.60, "render_runs": [101.91, 99.25, 94.95, 96.36, 96.28], "render_min": 94.95, "render_median": 96.36},
+  "timing_ms": {"load_and_bvh": 3.73, "render_runs": [101.88, 102.83, 95.57, 101.70, 106.87], "render_min": 95.57, "render_median": 101.88},
   "counters_per_frame": {"rays": 849315, "bvh_node_visits": 86731495, "triangle_tests": 15721293}
 }

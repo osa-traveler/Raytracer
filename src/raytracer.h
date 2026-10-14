@@ -243,6 +243,20 @@ struct BvhNode {
     int count = 0;       // leaf: number of triangles (0 for inner nodes)
 };
 
+// Rectangular area light, defined in the glb by a node named after the Blender light plus custom properties
+// (exported as glTF "extras"): rt_light_type = "rect", rt_size_x, rt_size_y (metres), rt_radiance.
+// Blender's own light settings are not exported to glTF (AREA lights are unsupported), so these properties
+// carry what the renderer needs. Convention (same as glTF cameras and KHR_lights_punctual, and what the Blender
+// exporter writes for light objects): the rectangle spans the node's local X and Y axes and emits toward local -Z.
+struct AreaLight {
+    bool valid = false;
+    Vec3 center;        // world position of the rectangle's centre
+    Vec3 edgeU, edgeV;  // full edge vectors (corner = center - edgeU/2 - edgeV/2)
+    Vec3 normal;        // unit vector in the emission direction
+    float area = 0;     // |edgeU x edgeV|
+    float radiance = 1; // emitted radiance, renderer units
+};
+
 struct CameraInfo {
     bool valid = false;
     Mat4 world;
@@ -258,6 +272,7 @@ struct Scene {
     PointLight light;
     Vec3 ambient;
     CameraInfo camera;
+    AreaLight area;       // valid only if the glb defines one
 
     void buildBvh() {
         size_t n = tris.size();
@@ -452,6 +467,18 @@ inline void walkNode(Scene& sc, const Glb& g, int ni, const Mat4& parent) {
     }
     Mat4 world = parent * local;
     if (n.has("mesh")) addMesh(sc, g, n["mesh"].i(), world);
+    if (n.has("extras") && n["extras"]["rt_light_type"].str == "rect" && !sc.area.valid) {
+        const Json& ex = n["extras"];
+        float sizeX = ex["rt_size_x"].f(1.0f), sizeY = ex["rt_size_y"].f(1.0f);
+        AreaLight& a = sc.area;
+        a.valid = true;
+        a.center = world.point(Vec3(0, 0, 0));
+        a.edgeU = world.point(Vec3(sizeX, 0, 0)) - a.center;
+        a.edgeV = world.point(Vec3(0, sizeY, 0)) - a.center;
+        a.normal = normalize(world.point(Vec3(0, 0, -1)) - a.center);
+        a.area = length(cross(a.edgeU, a.edgeV));
+        a.radiance = ex["rt_radiance"].f(1.0f);
+    }
     if (n.has("camera") && !sc.camera.valid) {
         const Json& cam = g.json["cameras"][n["camera"].i()]["perspective"];
         sc.camera.valid = true;
@@ -641,8 +668,10 @@ struct Display {
 // ---------------------------------------------------------------- scene defaults + render loop
 // The glb carries a camera but no usable light (Blender area lights are not exported), so the light is set here.
 // Position = where Blender's Area_Light sits: (-4, -2, 5) Z-up -> (-4, 5, 2) Y-up.
+// M1 step 1: the area light is read from the glb, but shading still uses a point light at its centre,
+// so images are unchanged until the area sampling is added (steps 2-3).
 inline void applyDefaultLighting(Scene& scene) {
-    scene.light = {Vec3(-4.0f, 5.0f, 2.0f), Vec3(1.0f, 1.0f, 1.0f)};
+    scene.light = {scene.area.valid ? scene.area.center : Vec3(-4.0f, 5.0f, 2.0f), Vec3(1.0f, 1.0f, 1.0f)};
     scene.ambient = Vec3(0.12f, 0.12f, 0.12f);
 }
 
