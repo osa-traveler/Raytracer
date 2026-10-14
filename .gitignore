@@ -1,0 +1,17 @@
+# build / output
+build/
+output.ppm
+output.png
+
+# Blender sources and backups (only the exported .glb is tracked)
+*.blend
+*.blend1
+*.blend2
+
+# local tooling / OS
+.mcp.json
+.claude/
+.DS_Store
+.vscode/
+.idea/
+*.code-workspace
