@@ -1,0 +1,4 @@
+7a788a976c28d5669765cddd2855b770e5b722947e1142c36f4e021224bdce39  Scene/Test/Room_2Spheres.glb
+4236eba67ae5ae19fe98fbc2065d163b19aa49fdec53fcb901f7c5d047deb396  Scene/Test/Untitled.glb
+fcb37c16e57546b2d713df56e8068f47d6ad687dcbac5c324eb3a002563f12e8  experiments/2026-10-15_baseline/Room_2Spheres.pfm
+9df6be96af3fcc63849b6070bcb9e55057f6b228305ff261852457e360795fb4  experiments/2026-10-15_baseline/Untitled.pfm

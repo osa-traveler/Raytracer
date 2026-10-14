@@ -31,6 +31,12 @@ cmake --build build
 リポジトリのルートで実行してください。描画が終わると `output.ppm` が保存されます。
 Esc キーまたはウィンドウを閉じると終了します。
 
+```sh
+# ウィンドウなしで描画し、画像(PNG)・線形の浮動小数(PFM)・設定と時間(JSON)を保存
+./build/raytrace Scene/Test/Room_2Spheres.glb --headless --repeat 5 --out experiments/test/run
+./build/raytrace_tests              # テスト
+```
+
 ## カメラとライトについて
 
 - カメラ: GLB にカメラがあればそれを使います(横方向の視野を保ったまま 4:3 に描画)。なければ [src/main.cpp](src/main.cpp) の固定値を使います。
@@ -46,3 +52,10 @@ Esc キーまたはウィンドウを閉じると終了します。
 
 - GLB のライトの読み込み
 - 距離減衰、アンチエイリアシング、クリアコートなど材質の拡張
+
+## ドキュメント
+
+- [docs/WORKFLOW.md](docs/WORKFLOW.md): 進め方のルール
+- [docs/WORKLOG.md](docs/WORKLOG.md): 作業ログ
+- [docs/CURRENT_IMPLEMENTATION.md](docs/CURRENT_IMPLEMENTATION.md): 現在の実装
+- [docs/RENDERER_ROADMAP.md](docs/RENDERER_ROADMAP.md): ロードマップ

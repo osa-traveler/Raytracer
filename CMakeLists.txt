@@ -12,3 +12,10 @@ find_package(Threads REQUIRED)
 
 add_executable(raytrace src/main.cpp)
 target_link_libraries(raytrace PRIVATE SDL2::SDL2 Threads::Threads)
+
+# Core tests: ./build/raytrace_tests  (or ctest --test-dir build)
+enable_testing()
+add_executable(raytrace_tests tests/test_main.cpp)
+target_compile_definitions(raytrace_tests PRIVATE PROJECT_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(raytrace_tests PRIVATE Threads::Threads)
+add_test(NAME raytrace_tests COMMAND raytrace_tests)

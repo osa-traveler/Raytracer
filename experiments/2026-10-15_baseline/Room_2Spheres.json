@@ -1,0 +1,20 @@
+{
+  "scene": "Scene/Test/Room_2Spheres.glb",
+  "note": "M0 baseline: Whitted renderer, 1 spp, scene Room_2Spheres.glb",
+  "resolution": [640, 480],
+  "samples_per_pixel": 1,
+  "sampling": "pixel centre, no randomness (no seed needed)",
+  "max_depth": 6,
+  "threads": 8,
+  "display": {"exposure": 1, "gamma": 2.2, "tone_mapping": "none (clamp)"},
+  "light": {"position": [-4, 5, 2], "color": [1, 1, 1], "falloff": "none"},
+  "ambient": [0.12, 0.12, 0.12],
+  "camera": {"from_file": true, "position": [1.25, 2.2, 6.8], "forward": [0, -0.159689, -0.987167], "tan_half_fov_y": 0.642857},
+  "triangles": 7948,
+  "materials": 8,
+  "bvh_nodes": 4095,
+  "build": "release (NDEBUG)",
+  "compiler": "Apple LLVM 21.0.0 (clang-2100.3.34.2)",
+  "timing_ms": {"load_and_bvh": 2.46, "render_runs": [109.07, 89.62, 89.54, 90.94, 87.12], "render_min": 87.12, "render_median": 89.62},
+  "counters_per_frame": {"rays": 852462, "bvh_node_visits": 77973176, "triangle_tests": 17445204}
+}
