@@ -24,7 +24,7 @@ glTF バイナリ(`.glb`)のシーンを読み込み、640x480 のフレーム�
 cmake -S . -B build
 cmake --build build
 ./build/raytrace                    # 既定: Scene/Test/Untitled.glb
-./build/raytrace Scene/Test/Beetle.glb   # 1967年式ビートルのシーン
+./build/raytrace Assets/VW_Beetle_1967.glb   # 別の GLB を指定(例: ビートル単体)
 ./build/raytrace path/to/scene.glb  # 別のシーン
 ```
 
@@ -36,10 +36,11 @@ Esc キーまたはウィンドウを閉じると終了します。
 - カメラ: GLB にカメラがあればそれを使います(横方向の視野を保ったまま 4:3 に描画)。なければ [src/main.cpp](src/main.cpp) の固定値を使います。
 - ライト: GLB のライトはまだ読み込まず、点光源を固定位置に置いています。Blender のエリアライトは glTF に書き出されません。
 
-## シーン
+## シーン・アセット
 
-- `Scene/Test/Untitled.glb`: Blender で作成した検証用シーン(部屋、金属球、ガラス球)
-- `Scene/Test/Beetle.glb`: 上のシーンの中央に、Blender で手作りした1967年式フォルクスワーゲン・ビートル風のモデルを置いたもの(簡易的な形状で、正確な再現ではありません)
+- `Scene/Test/Untitled.glb`: Blender で作成した検証用シーン(部屋、金属球、青い拡散球、ガラス球)
+- `Assets/VW_Beetle_1967.glb`: Blender で手作りした1967年式フォルクスワーゲン・ビートル風のモデル(約31万三角形。簡易的な形状で、正確な再現ではありません)。
+  レンダリングが重いため、現在のシーンには含めていません。
 
 ## 今後の予定
 
