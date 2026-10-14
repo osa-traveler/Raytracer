@@ -34,6 +34,9 @@ Esc キーまたはウィンドウを閉じると終了します。
 ```sh
 # ウィンドウなしで描画し、画像(PNG)・線形の浮動小数(PFM)・設定と時間(JSON)を保存
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --repeat 5 --out experiments/test/run
+# サンプル数・ジッタ(アンチエイリアス)・乱数のシード、画像の差(RMSE)
+./build/raytrace Scene/Test/Room_2Spheres.glb --headless --jitter --spp 16 --seed 1 --out out
+./build/raytrace --rmse out.pfm other.pfm
 ./build/raytrace_tests              # テスト
 ```
 

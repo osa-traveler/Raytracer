@@ -513,6 +513,49 @@ inline Scene loadScene(const std::string& path) {
     return sc;
 }
 
+// ---------------------------------------------------------------- random numbers
+// PCG32 (M.E. O'Neill): 64-bit state, 32-bit output. Small, fast, good statistical quality.
+struct Pcg32 {
+    uint64_t state = 0, inc = 1;
+    void seed(uint64_t initState, uint64_t initSeq) {
+        state = 0;
+        inc = (initSeq << 1) | 1u;   // the stream selector must be odd
+        nextU32();
+        state += initState;
+        nextU32();
+    }
+    uint32_t nextU32() {
+        uint64_t old = state;
+        state = old * 6364136223846793005ULL + inc;
+        uint32_t xorShifted = (uint32_t)(((old >> 18u) ^ old) >> 27u);
+        uint32_t rot = (uint32_t)(old >> 59u);
+        return (xorShifted >> rot) | (xorShifted << ((32u - rot) & 31u));
+    }
+    // Uniform float in [0, 1): the top 24 bits (a float has a 24-bit significand), so 1.0 is never returned.
+    float nextFloat() { return (float)(nextU32() >> 8) * (1.0f / 16777216.0f); }
+};
+
+// Spreads nearby integers (pixel 100, pixel 101, ...) into unrelated 64-bit values (SplitMix64).
+inline uint64_t splitmix64(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+// One random number stream per (pixel, sample). Nothing is shared between streams or threads, so the same
+// seed gives the same image whatever the thread count or the order in which pixels are rendered.
+struct Sampler {
+    Pcg32 rng;
+    Sampler(uint64_t seed, uint64_t pixelIndex, uint32_t sampleIndex) {
+        uint64_t h = splitmix64(seed);
+        h = splitmix64(h ^ pixelIndex);
+        h = splitmix64(h ^ ((uint64_t)sampleIndex << 32 | 0x5bd1e995u));
+        rng.seed(h, splitmix64(h ^ pixelIndex));
+    }
+    float next1D() { return rng.nextFloat(); }
+};
+
 // ---------------------------------------------------------------- shading
 inline float schlick(float cosTheta, float f0) {
     return f0 + (1 - f0) * std::pow(1 - cosTheta, 5.0f);
@@ -543,7 +586,8 @@ inline Vec3 background(const Ray& r) {
     return mix(Vec3(0.9f, 0.9f, 0.9f), Vec3(0.4f, 0.6f, 0.9f), t);
 }
 
-inline Vec3 trace(const Scene& sc, const Ray& ray, int depth) {
+inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
+    (void)smp;   // not used yet: area-light sampling (M1 step 3) will draw its random numbers from here
     Hit h;
     if (!sc.intersect(ray, INF, h)) return background(ray);
     const Material& m = sc.materials[h.material];
@@ -588,14 +632,14 @@ inline Vec3 trace(const Scene& sc, const Ray& ray, int depth) {
         float eta = front ? 1.0f / ior : ior;
         Vec3 rd = normalize(reflect(ray.d, N));
         float cosT2 = 1 - eta * eta * (1 - cosI * cosI);
-        Vec3 reflected = trace(sc, {h.p + N * (EPS * 10), rd}, depth + 1);
+        Vec3 reflected = trace(sc, {h.p + N * (EPS * 10), rd}, depth + 1, smp);
         if (cosT2 < 0) {  // total internal reflection
             color += reflected;
         } else {
             float F = schlick(cosI, 0.04f);
             if (!front) F = schlick(std::sqrt(cosT2), 0.04f);
             Vec3 td = normalize(ray.d * eta + N * (eta * cosI - std::sqrt(cosT2)));
-            Vec3 refracted = trace(sc, {h.p - N * (EPS * 10), td}, depth + 1);
+            Vec3 refracted = trace(sc, {h.p - N * (EPS * 10), td}, depth + 1, smp);
             color += reflected * F + refracted * m.base * ((1 - F) * m.transmission);
         }
     } else if (m.roughness < 0.5f) {
@@ -603,7 +647,7 @@ inline Vec3 trace(const Scene& sc, const Ray& ray, int depth) {
         Vec3 f0 = mix(Vec3(0.04f, 0.04f, 0.04f), m.base, m.metallic);
         Vec3 F = f0 + (Vec3(1, 1, 1) - f0) * std::pow(1 - cosI, 5.0f);
         Vec3 rd = normalize(reflect(ray.d, N));
-        color += F * trace(sc, {h.p + N * (EPS * 10), rd}, depth + 1) * (1 - m.roughness);
+        color += F * trace(sc, {h.p + N * (EPS * 10), rd}, depth + 1, smp) * (1 - m.roughness);
     }
     return color;
 }
@@ -680,10 +724,19 @@ inline Camera makeCamera(const Scene& scene) {
                               : Camera(Vec3(1.25f, 2.6f, 6.6f), Vec3(1.25f, 1.0f, 0.0f), 60.0f);
 }
 
-// Renders one sample per pixel (pixel centre) into `film`, row by row, on nThreads threads.
+struct RenderSettings {
+    unsigned threads = 1;
+    int spp = 1;            // samples per pixel
+    bool jitter = false;    // false: every sample goes through the pixel centre; true: uniformly random point inside the pixel
+    uint64_t seed = 1;      // global random seed
+};
+
+// Renders settings.spp samples per pixel into `film`, row by row, on settings.threads threads.
 // rowDone (optional, HEIGHT entries) is set to 1 when a row is finished; quit (optional) aborts early.
 // Counters of all threads are added to `total`.
-inline void renderFrame(const Scene& scene, const Camera& cam, Film& film, unsigned nThreads,
+// Every (pixel, sample) has its own Sampler stream and a pixel's samples are summed in a fixed order, so the
+// result does not depend on the number of threads.
+inline void renderFrame(const Scene& scene, const Camera& cam, Film& film, const RenderSettings& rs,
                         std::atomic<uint8_t>* rowDone, const std::atomic<bool>* quit, Stats& total) {
     std::atomic<int> nextRow{0};
     std::atomic<uint64_t> rays{0}, nodes{0}, tris{0};
@@ -692,13 +745,21 @@ inline void renderFrame(const Scene& scene, const Camera& cam, Film& film, unsig
         for (;;) {
             int y = nextRow.fetch_add(1);
             if (y >= film.h || (quit && *quit)) break;
-            for (int x = 0; x < film.w; x++) film.add(x, y, trace(scene, cam.ray(x + 0.5f, y + 0.5f), 0));
+            for (int x = 0; x < film.w; x++) {
+                uint64_t pixel = (uint64_t)y * film.w + x;
+                for (int k = 0; k < rs.spp; k++) {
+                    Sampler smp(rs.seed, pixel, (uint32_t)k);
+                    float px = x + 0.5f, py = y + 0.5f;
+                    if (rs.jitter) { px = x + smp.next1D(); py = y + smp.next1D(); }
+                    film.add(x, y, trace(scene, cam.ray(px, py), 0, smp));
+                }
+            }
             if (rowDone) rowDone[y].store(1);
         }
         rays += tlStats.rays; nodes += tlStats.nodeVisits; tris += tlStats.triTests;
     };
     std::vector<std::thread> pool;
-    for (unsigned i = 0; i < std::max(1u, nThreads); i++) pool.emplace_back(worker);
+    for (unsigned i = 0; i < std::max(1u, rs.threads); i++) pool.emplace_back(worker);
     for (auto& t : pool) t.join();
     total.rays += rays; total.nodeVisits += nodes; total.triTests += tris;
 }

@@ -1,0 +1,16 @@
+RMSE against the 1024 spp reference (linear values, whole image)
+centre_1spp    0.009931
+jitter_1spp    0.019929
+jitter_4spp    0.009593
+jitter_16spp   0.004665
+jitter_64spp   0.002400
+jitter_256spp  0.001483
+
+render time (median of 1 run, ms) and rays per frame:
+centre_1spp    86.94 ms, 852655 rays
+jitter_1spp    88.56 ms, 853106 rays
+jitter_4spp    336.92 ms, 3411585 rays
+jitter_16spp   1300.17 ms, 13647610 rays
+jitter_64spp   5186.22 ms, 54593792 rays
+jitter_256spp  20485.21 ms, 218374316 rays
+reference      82158.66 ms, 873489525 rays

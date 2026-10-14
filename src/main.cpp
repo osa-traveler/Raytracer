@@ -1,6 +1,8 @@
 // Whitted-style ray tracer: glTF(.glb) scene -> 640x480 image, shown with SDL2 or written headless.
 //
 //   raytrace [scene.glb] [--headless] [--out PREFIX] [--repeat N] [--threads N] [--exposure X] [--note TEXT]
+//            [--spp N] [--jitter] [--seed N]
+//   raytrace --rmse A.pfm B.pfm      (root-mean-square difference of two linear images)
 //
 // Without --out the finished image is saved as output.ppm. With --out PREFIX it writes
 // PREFIX.png (display image), PREFIX.pfm (linear float film) and PREFIX.json (settings, timings, counters).
@@ -20,6 +22,10 @@ struct Options {
     int repeat = 1;
     unsigned threads = std::max(1u, std::thread::hardware_concurrency());
     float exposure = 1.0f;
+    int spp = 1;
+    bool jitter = false;
+    uint64_t seed = 1;
+    RenderSettings settings() const { RenderSettings r; r.threads = threads; r.spp = spp; r.jitter = jitter; r.seed = seed; return r; }
 };
 
 static bool parseArgs(int argc, char** argv, Options& o) {
@@ -33,6 +39,9 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--repeat" && (v = next())) o.repeat = std::max(1, std::atoi(v));
         else if (a == "--threads" && (v = next())) o.threads = (unsigned)std::max(1, std::atoi(v));
         else if (a == "--exposure" && (v = next())) o.exposure = (float)std::atof(v);
+        else if (a == "--spp" && (v = next())) o.spp = std::max(1, std::atoi(v));
+        else if (a == "--jitter") o.jitter = true;
+        else if (a == "--seed" && (v = next())) o.seed = (uint64_t)std::strtoull(v, nullptr, 10);
         else if (a.rfind("--", 0) != 0) o.scene = a;
         else { std::fprintf(stderr, "unknown or incomplete option: %s\n", a.c_str()); return false; }
     }
@@ -65,8 +74,9 @@ static void writeConfig(const std::string& path, const Options& o, const Scene& 
     std::fprintf(f, "  \"scene\": \"%s\",\n", jsonEscape(o.scene).c_str());
     std::fprintf(f, "  \"note\": \"%s\",\n", jsonEscape(o.note).c_str());
     std::fprintf(f, "  \"resolution\": [%d, %d],\n", WIDTH, HEIGHT);
-    std::fprintf(f, "  \"samples_per_pixel\": 1,\n");
-    std::fprintf(f, "  \"sampling\": \"pixel centre, no randomness (no seed needed)\",\n");
+    std::fprintf(f, "  \"samples_per_pixel\": %d,\n", o.spp);
+    std::fprintf(f, "  \"pixel_sampling\": \"%s\",\n", o.jitter ? "uniform random point inside the pixel (jitter)" : "pixel centre");
+    std::fprintf(f, "  \"rng\": {\"generator\": \"PCG32, one stream per (pixel, sample)\", \"seed\": %llu},\n", (unsigned long long)o.seed);
     std::fprintf(f, "  \"max_depth\": %d,\n", MAX_DEPTH);
     std::fprintf(f, "  \"threads\": %u,\n", o.threads);
     std::fprintf(f, "  \"display\": {\"exposure\": %g, \"gamma\": %g, \"tone_mapping\": \"none (clamp)\"},\n", disp.exposure, disp.gamma);
@@ -106,6 +116,12 @@ static void saveOutputs(const Options& o, const Film& film, const Display& disp,
 }
 
 int main(int argc, char** argv) {
+    if (argc == 4 && std::string(argv[1]) == "--rmse") {      // raytrace --rmse A.pfm B.pfm : difference of two linear images
+        double r;
+        if (!rmsePFM(argv[2], argv[3], r)) { std::fprintf(stderr, "cannot compare %s and %s\n", argv[2], argv[3]); return 1; }
+        std::printf("%.6f\n", r);
+        return 0;
+    }
     Options opt;
     if (!parseArgs(argc, argv, opt)) return 1;
 
@@ -136,7 +152,7 @@ int main(int argc, char** argv) {
             Film f(WIDTH, HEIGHT);
             Stats s;
             auto a = std::chrono::steady_clock::now();
-            renderFrame(scene, cam, f, opt.threads, nullptr, nullptr, s);
+            renderFrame(scene, cam, f, opt.settings(), nullptr, nullptr, s);
             times.push_back(ms(a, std::chrono::steady_clock::now()));
             film = std::move(f); stats = s;
             std::printf("render %d/%d: %.1f ms\n", r + 1, opt.repeat, times.back());
@@ -169,7 +185,7 @@ int main(int argc, char** argv) {
     auto start = std::chrono::steady_clock::now();
     double renderMs = 0;
     std::thread renderer([&]() {
-        renderFrame(scene, cam, film, opt.threads, rowDone.data(), &quit, stats);
+        renderFrame(scene, cam, film, opt.settings(), rowDone.data(), &quit, stats);
         renderMs = ms(start, std::chrono::steady_clock::now());
     });
 

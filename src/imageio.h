@@ -109,3 +109,30 @@ inline bool writePFM(const std::string& path, const Film& film) {
     std::fclose(f);
     return true;
 }
+
+// Reads a PFM written by writePFM (little endian RGB float). Returns false on any mismatch.
+inline bool readPFM(const std::string& path, int& w, int& h, std::vector<float>& data) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    char magic[3] = {0};
+    float scale = 0;
+    bool ok = std::fscanf(f, "%2s %d %d %f", magic, &w, &h, &scale) == 4 && magic[0] == 'P' && magic[1] == 'F' && scale < 0;
+    if (ok) {
+        std::fgetc(f);   // the single whitespace after the header
+        data.resize((size_t)w * h * 3);
+        ok = std::fread(data.data(), sizeof(float), data.size(), f) == data.size();
+    }
+    std::fclose(f);
+    return ok;
+}
+
+// Root-mean-square difference between two linear images (all channels together).
+inline bool rmsePFM(const std::string& a, const std::string& b, double& rmse) {
+    int w1, h1, w2, h2;
+    std::vector<float> d1, d2;
+    if (!readPFM(a, w1, h1, d1) || !readPFM(b, w2, h2, d2) || w1 != w2 || h1 != h2) return false;
+    double acc = 0;
+    for (size_t i = 0; i < d1.size(); i++) acc += ((double)d1[i] - d2[i]) * ((double)d1[i] - d2[i]);
+    rmse = std::sqrt(acc / d1.size());
+    return true;
+}

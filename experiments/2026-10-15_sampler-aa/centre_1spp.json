@@ -1,0 +1,22 @@
+{
+  "scene": "Scene/Test/Room_2Spheres.glb",
+  "note": "pixel centre, 1 spp",
+  "resolution": [640, 480],
+  "samples_per_pixel": 1,
+  "pixel_sampling": "pixel centre",
+  "rng": {"generator": "PCG32, one stream per (pixel, sample)", "seed": 1},
+  "max_depth": 6,
+  "threads": 8,
+  "display": {"exposure": 1, "gamma": 2.2, "tone_mapping": "none (clamp)"},
+  "light": {"position": [-4, 5, 2], "color": [1, 1, 1], "falloff": "none"},
+  "ambient": [0.12, 0.12, 0.12],
+  "area_light": {"center": [-4, 5, 2], "edge_u": [0.894427, 0, 1.78885], "edge_v": [1.19257, 1.49071, -0.596285], "normal": [0.666667, -0.666667, -0.333333], "area": 4, "radiance": 15, "used_for_shading": false},
+  "camera": {"from_file": true, "position": [0, 2.2, 6.8], "forward": [0, -0.173785, -0.984784], "tan_half_fov_y": 0.642857},
+  "triangles": 7948,
+  "materials": 8,
+  "bvh_nodes": 4095,
+  "build": "release (NDEBUG)",
+  "compiler": "Apple LLVM 21.0.0 (clang-2100.3.34.2)",
+  "timing_ms": {"load_and_bvh": 3.13, "render_runs": [86.94], "render_min": 86.94, "render_median": 86.94},
+  "counters_per_frame": {"rays": 852655, "bvh_node_visits": 76908979, "triangle_tests": 17287341}
+}

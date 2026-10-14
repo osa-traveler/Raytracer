@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <random>
 
+#include "../src/imageio.h"
 #include "../src/raytracer.h"
 
 static int g_checks = 0, g_failed = 0;
@@ -178,8 +179,9 @@ TEST(shading_normal_faces_the_viewer) {
         CHECK_NEAR(t.n0.y, flipped ? -1.0 : 1.0, 1e-6);
         sc.tris.push_back(t);
         sc.buildBvh();
-        Vec3 above = trace(sc, Ray{{0, 3, 0}, {0, -1, 0}}, 0);
-        Vec3 below = trace(sc, Ray{{0, -3, 0}, {0, 1, 0}}, 0);
+        Sampler smp(1, 0, 0);
+        Vec3 above = trace(sc, Ray{{0, 3, 0}, {0, -1, 0}}, 0, smp);
+        Vec3 below = trace(sc, Ray{{0, -3, 0}, {0, 1, 0}}, 0, smp);
         CHECK(above.x > 1.0f);
         CHECK_NEAR(below.x, 0.12, 1e-6);
     }
@@ -258,6 +260,145 @@ TEST(glb_area_light_is_read_from_node_extras) {
         applyDefaultLighting(sc);
         CHECK_NEAR(sc.light.pos.x, a.center.x, 1e-6);             // step 1: shading still uses a point light at the centre
     }
+}
+
+// ---------------------------------------------------------------- random numbers
+TEST(pcg32_matches_the_published_reference_sequence) {
+    // pcg32_srandom(42, 54): the first outputs listed in the PCG reference implementation's demo.
+    Pcg32 r; r.seed(42, 54);
+    const uint32_t expect[6] = {0xa15c02b7u, 0x7b47f409u, 0xba1d3330u, 0x83d2f293u, 0xbfa4784bu, 0xcbed606eu};
+    for (uint32_t e : expect) CHECK(r.nextU32() == e);
+}
+
+TEST(sampler_is_reproducible_and_streams_differ) {
+    Sampler a(7, 100, 0), b(7, 100, 0), otherPixel(7, 101, 0), otherSample(7, 100, 1), otherSeed(8, 100, 0);
+    int same = 0, diffPixel = 0, diffSample = 0, diffSeed = 0;
+    for (int i = 0; i < 1000; i++) {
+        float x = a.next1D();
+        same += (x == b.next1D());
+        diffPixel += (x != otherPixel.next1D());
+        diffSample += (x != otherSample.next1D());
+        diffSeed += (x != otherSeed.next1D());
+    }
+    CHECK(same == 1000);                                    // same (seed, pixel, sample) -> same numbers
+    CHECK(diffPixel > 990 && diffSample > 990 && diffSeed > 990);
+}
+
+TEST(random_floats_are_uniform_in_zero_one) {
+    Pcg32 r; r.seed(1, 2);
+    const int N = 1000000;
+    double sum = 0, sum2 = 0; int bins[10] = {0}; float lo = 1, hi = 0;
+    for (int i = 0; i < N; i++) {
+        float x = r.nextFloat();
+        lo = std::min(lo, x); hi = std::max(hi, x);
+        sum += x; sum2 += (double)x * x;
+        bins[(int)(x * 10)]++;
+    }
+    CHECK(lo >= 0.0f && hi < 1.0f);                         // [0, 1): never exactly 1
+    CHECK_NEAR(sum / N, 0.5, 0.002);                        // standard error of the mean is 0.0003
+    CHECK_NEAR(sum2 / N - (sum / N) * (sum / N), 1.0 / 12.0, 0.001);
+    for (int b = 0; b < 10; b++) CHECK(std::abs(bins[b] - N / 10) < 1500);   // each bin: 100000 +- 300 (sigma)
+}
+
+TEST(neighbouring_pixels_get_uncorrelated_streams) {
+    const int N = 100000;
+    Sampler a(1, 1000, 0), b(1, 1001, 0), c(1, 1000, 1);
+    double sa = 0, sb = 0, sc = 0, saa = 0, sbb = 0, scc = 0, sab = 0, sac = 0;
+    for (int i = 0; i < N; i++) {
+        double x = a.next1D(), y = b.next1D(), z = c.next1D();
+        sa += x; sb += y; sc += z; saa += x * x; sbb += y * y; scc += z * z; sab += x * y; sac += x * z;
+    }
+    auto corr = [&](double s1, double s2, double s11, double s22, double s12) {
+        double cov = s12 / N - (s1 / N) * (s2 / N);
+        return cov / std::sqrt((s11 / N - (s1 / N) * (s1 / N)) * (s22 / N - (s2 / N) * (s2 / N)));
+    };
+    CHECK(std::fabs(corr(sa, sb, saa, sbb, sab)) < 0.01);   // pixel 1000 vs pixel 1001 (standard error ~0.003)
+    CHECK(std::fabs(corr(sa, sc, saa, scc, sac)) < 0.01);   // sample 0 vs sample 1 of the same pixel
+}
+
+TEST(monte_carlo_error_shrinks_like_one_over_sqrt_n) {
+    // Estimate the area of a step function, f(x) = 1 for x < 0.3 (true value 0.3), with N uniform samples.
+    // The root-mean-square error should be sqrt(0.3 * 0.7 / N): 4x smaller when N grows 16x.
+    auto rmsError = [&](int n, int trials) {
+        double acc = 0;
+        for (int t = 0; t < trials; t++) {
+            Sampler smp(99, (uint64_t)t, (uint32_t)n);
+            int hits = 0;
+            for (int i = 0; i < n; i++) hits += smp.next1D() < 0.3f;
+            double e = (double)hits / n - 0.3;
+            acc += e * e;
+        }
+        return std::sqrt(acc / trials);
+    };
+    double e16 = rmsError(16, 4000), e256 = rmsError(256, 4000);
+    CHECK_NEAR(e16, std::sqrt(0.21 / 16), 0.004);
+    CHECK_NEAR(e256, std::sqrt(0.21 / 256), 0.001);
+    CHECK_NEAR(e16 / e256, 4.0, 0.3);
+}
+
+TEST(pfm_round_trip_and_rmse) {
+    Film a(4, 3), b(4, 3);
+    for (int y = 0; y < 3; y++)
+        for (int x = 0; x < 4; x++) { a.add(x, y, Vec3(1.0f + x, 2.0f, 4.0f + y)); b.add(x, y, Vec3(1.0f + x, 2.5f, 4.0f + y)); }
+    CHECK(writePFM("test_a.pfm", a) && writePFM("test_b.pfm", b));
+    int w, h; std::vector<float> d;
+    CHECK(readPFM("test_a.pfm", w, h, d) && w == 4 && h == 3);
+    CHECK(d.size() == 36);
+    double r = -1, self = -1;
+    CHECK(rmsePFM("test_a.pfm", "test_b.pfm", r));
+    CHECK(rmsePFM("test_a.pfm", "test_a.pfm", self));
+    CHECK_NEAR(r, std::sqrt(0.25 / 3.0), 1e-9);        // only the green channel differs, by 0.5 -> sqrt(0.5^2 / 3 channels)
+    CHECK(self == 0.0);
+    std::remove("test_a.pfm"); std::remove("test_b.pfm");
+}
+
+// ---------------------------------------------------------------- render determinism
+static bool sameFilm(const Film& a, const Film& b) {
+    for (size_t i = 0; i < a.sum.size(); i++)
+        if (a.sum[i].x != b.sum[i].x || a.sum[i].y != b.sum[i].y || a.sum[i].z != b.sum[i].z || a.count[i] != b.count[i]) return false;
+    return true;
+}
+
+TEST(render_does_not_depend_on_thread_count_or_seed_without_jitter) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    applyDefaultLighting(sc);
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.spp = 1; rs.jitter = false;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT), c(WIDTH, HEIGHT);
+    Stats st;
+    rs.threads = 1; rs.seed = 1; renderFrame(sc, cam, a, rs, nullptr, nullptr, st);
+    rs.threads = 5; rs.seed = 1; renderFrame(sc, cam, b, rs, nullptr, nullptr, st);
+    rs.threads = 5; rs.seed = 12345; renderFrame(sc, cam, c, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(a, b));      // thread count never changes the result
+    CHECK(sameFilm(a, c));      // nothing is random yet, so the seed has no effect either
+}
+
+TEST(jittered_render_is_deterministic_per_seed_and_independent_of_threads) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    applyDefaultLighting(sc);
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.spp = 2; rs.jitter = true;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT), c(WIDTH, HEIGHT), centre(WIDTH, HEIGHT);
+    Stats st;
+    rs.threads = 1; rs.seed = 1; renderFrame(sc, cam, a, rs, nullptr, nullptr, st);
+    rs.threads = 7; rs.seed = 1; renderFrame(sc, cam, b, rs, nullptr, nullptr, st);
+    rs.threads = 7; rs.seed = 2; renderFrame(sc, cam, c, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(a, b));      // same seed -> identical film, 1 thread or 7
+    CHECK(!sameFilm(a, c));     // a different seed really changes the random samples
+    CHECK(a.count[0] == 2 && a.count[WIDTH * HEIGHT - 1] == 2);   // two samples per pixel were stored
+    rs.jitter = false; rs.spp = 1; rs.threads = 4; renderFrame(sc, cam, centre, rs, nullptr, nullptr, st);
+    // Jitter moves every sample a little, so smooth areas change slightly everywhere (measured: ~99% of pixels, mean
+    // difference ~0.002) while the large changes (> 0.1, measured ~1000 pixels) happen only along object edges.
+    int tiny = 0, large = 0; double meanDiff = 0;
+    for (int y = 0; y < HEIGHT; y++)
+        for (int x = 0; x < WIDTH; x++) {
+            Vec3 p = a.pixel(x, y), q = centre.pixel(x, y);
+            float d = std::max(std::fabs(p.x - q.x), std::max(std::fabs(p.y - q.y), std::fabs(p.z - q.z)));
+            tiny += d > 0; large += d > 0.1f; meanDiff += d;
+        }
+    CHECK(tiny > WIDTH * HEIGHT * 9 / 10);
+    CHECK(large > 300 && large < 4000);
+    CHECK(meanDiff / (WIDTH * HEIGHT) < 0.01);
 }
 
 int main() {
