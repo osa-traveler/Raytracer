@@ -225,16 +225,19 @@ TEST(glb_room_scene_loads_with_camera_and_spheres_in_place) {
     CHECK(sc.tris.size() > 1000);
     CHECK(sc.camera.valid);
     Camera cam(sc.camera);
-    CHECK_NEAR(cam.pos.x, 1.25, 1e-4); CHECK_NEAR(cam.pos.y, 2.2, 1e-4); CHECK_NEAR(cam.pos.z, 6.8, 1e-4);   // Blender (1.25, -6.8, 2.2), Z-up -> Y-up
+    CHECK_NEAR(cam.pos.x, 0.0, 1e-4); CHECK_NEAR(cam.pos.y, 2.2, 1e-4); CHECK_NEAR(cam.pos.z, 6.8, 1e-4);     // Blender (0, -6.8, 2.2), Z-up -> Y-up
     CHECK(cam.forward.z < -0.9f && cam.forward.y < 0);                 // looks toward -z, tilted slightly down
     CHECK_NEAR(cam.tanHalfFov, std::tan(0.8985202f * 0.5f) * (16.0 / 9.0) / (4.0 / 3.0), 1e-4);
-    Hit h;                                                             // sphere centres: metal (0,1,0), glass (2.5,1,0), r = 1
-    CHECK(sc.intersect(Ray{{0, 3, 0}, {0, -1, 0}}, INF, h));
+    Hit h;                                                             // sphere centres: metal (-1.25,1,0), glass (1.25,1,0), r = 1
+    CHECK(sc.intersect(Ray{{-1.25f, 3, 0}, {0, -1, 0}}, INF, h));
     CHECK_NEAR(h.t, 1.0, 1e-2); CHECK_NEAR(h.n.y, 1.0, 1e-2);
-    CHECK(sc.intersect(Ray{{2.5f, 3, 0}, {0, -1, 0}}, INF, h));
+    CHECK(sc.intersect(Ray{{1.25f, 3, 0}, {0, -1, 0}}, INF, h));
     CHECK_NEAR(h.t, 1.0, 1e-2);
-    CHECK(sc.intersect(Ray{{-4, 3, 0}, {0, -1, 0}}, INF, h));          // nothing there: hits the floor at y = 0
+    CHECK(sc.intersect(Ray{{0, 3, 0}, {0, -1, 0}}, INF, h));           // between the two spheres: hits the floor at y = 0
     CHECK_NEAR(h.t, 3.0, 1e-4); CHECK_NEAR(h.n.y, 1.0, 1e-4);
+    // The room is centred on x = 0 and so is the camera: the ray through the image centre stays on x = 0 where it hits (the floor, seen from above).
+    CHECK(sc.intersect(cam.ray(WIDTH / 2.0f, HEIGHT / 2.0f), INF, h));
+    CHECK_NEAR(h.p.x, 0.0, 1e-3);
 }
 
 int main() {
