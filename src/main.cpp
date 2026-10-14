@@ -197,11 +197,6 @@ struct Triangle {
     int material;
 };
 
-struct MeshInstance {
-    Vec3 bmin{INF, INF, INF}, bmax{-INF, -INF, -INF};
-    size_t first = 0, count = 0;
-};
-
 struct Ray { Vec3 o, d; };
 
 struct Hit {
@@ -212,49 +207,114 @@ struct Hit {
 
 struct PointLight { Vec3 pos; Vec3 color; };
 
+struct BvhNode {
+    Vec3 bmin, bmax;
+    int left = -1;       // inner node: child indices
+    int right = -1;
+    int first = 0;       // leaf: first index into triOrder
+    int count = 0;       // leaf: number of triangles (0 for inner nodes)
+};
+
+struct CameraInfo {
+    bool valid = false;
+    Mat4 world;
+    float yfov = 0.9f;
+    float aspect = 16.0f / 9.0f;
+};
+
 struct Scene {
     std::vector<Material> materials;
     std::vector<Triangle> tris;
-    std::vector<MeshInstance> meshes;
+    std::vector<BvhNode> nodes;
+    std::vector<int> triOrder;
     PointLight light;
     Vec3 ambient;
+    CameraInfo camera;
 
-    static bool hitAABB(const MeshInstance& m, const Ray& r, float tmax) {
-        float t0 = 0, t1 = tmax;
-        const float o[3] = {r.o.x, r.o.y, r.o.z}, d[3] = {r.d.x, r.d.y, r.d.z};
-        const float lo[3] = {m.bmin.x, m.bmin.y, m.bmin.z}, hi[3] = {m.bmax.x, m.bmax.y, m.bmax.z};
-        for (int a = 0; a < 3; a++) {
-            float inv = 1.0f / d[a];
-            float ta = (lo[a] - o[a]) * inv, tb = (hi[a] - o[a]) * inv;
-            if (ta > tb) std::swap(ta, tb);
-            t0 = std::max(t0, ta); t1 = std::min(t1, tb);
-            if (t0 > t1) return false;
+    void buildBvh() {
+        size_t n = tris.size();
+        triOrder.resize(n);
+        std::vector<Vec3> cen(n);
+        for (size_t i = 0; i < n; i++) {
+            triOrder[i] = (int)i;
+            cen[i] = (tris[i].p0 + tris[i].p1 + tris[i].p2) * (1.0f / 3.0f);
         }
-        return true;
+        nodes.clear();
+        nodes.reserve(2 * n / 2 + 1);
+        build(0, (int)n, cen);
+    }
+
+    int build(int begin, int end, const std::vector<Vec3>& cen) {
+        int id = (int)nodes.size();
+        nodes.emplace_back();
+        Vec3 lo(INF, INF, INF), hi(-INF, -INF, -INF), clo = lo, chi = hi;
+        for (int i = begin; i < end; i++) {
+            const Triangle& t = tris[triOrder[i]];
+            for (const Vec3* p : {&t.p0, &t.p1, &t.p2}) {
+                lo = {std::min(lo.x, p->x), std::min(lo.y, p->y), std::min(lo.z, p->z)};
+                hi = {std::max(hi.x, p->x), std::max(hi.y, p->y), std::max(hi.z, p->z)};
+            }
+            const Vec3& c = cen[triOrder[i]];
+            clo = {std::min(clo.x, c.x), std::min(clo.y, c.y), std::min(clo.z, c.z)};
+            chi = {std::max(chi.x, c.x), std::max(chi.y, c.y), std::max(chi.z, c.z)};
+        }
+        nodes[id].bmin = lo - Vec3(EPS, EPS, EPS);
+        nodes[id].bmax = hi + Vec3(EPS, EPS, EPS);
+        int count = end - begin;
+        Vec3 ext = chi - clo;
+        if (count <= 4 || std::max(ext.x, std::max(ext.y, ext.z)) <= 0) {
+            nodes[id].first = begin; nodes[id].count = count;
+            return id;
+        }
+        int axis = ext.x > ext.y ? (ext.x > ext.z ? 0 : 2) : (ext.y > ext.z ? 1 : 2);
+        auto key = [&](int t) { const Vec3& c = cen[t]; return axis == 0 ? c.x : axis == 1 ? c.y : c.z; };
+        int mid = (begin + end) / 2;
+        std::nth_element(triOrder.begin() + begin, triOrder.begin() + mid, triOrder.begin() + end,
+                         [&](int a, int b) { return key(a) < key(b); });
+        build(begin, mid, cen);
+        int right = build(mid, end, cen);
+        nodes[id].left = id + 1;
+        nodes[id].right = right;
+        return id;
+    }
+
+    static bool hitBox(const BvhNode& n, const Ray& r, const Vec3& inv, float tmax) {
+        float tx0 = (n.bmin.x - r.o.x) * inv.x, tx1 = (n.bmax.x - r.o.x) * inv.x;
+        float ty0 = (n.bmin.y - r.o.y) * inv.y, ty1 = (n.bmax.y - r.o.y) * inv.y;
+        float tz0 = (n.bmin.z - r.o.z) * inv.z, tz1 = (n.bmax.z - r.o.z) * inv.z;
+        float t0 = std::max(std::max(std::min(tx0, tx1), std::min(ty0, ty1)), std::max(std::min(tz0, tz1), 0.0f));
+        float t1 = std::min(std::min(std::max(tx0, tx1), std::max(ty0, ty1)), std::min(std::max(tz0, tz1), tmax));
+        return t0 <= t1;
     }
 
     // Moller-Trumbore, double sided. Returns closest hit.
     bool intersect(const Ray& r, float tmax, Hit& hit) const {
+        if (nodes.empty()) return false;
         bool found = false;
         float best = tmax;
         const Triangle* bt = nullptr;
         float bu = 0, bv = 0;
-        for (const auto& m : meshes) {
-            if (!hitAABB(m, r, best)) continue;
-            for (size_t i = m.first; i < m.first + m.count; i++) {
-                const Triangle& tr = tris[i];
+        Vec3 inv(1.0f / r.d.x, 1.0f / r.d.y, 1.0f / r.d.z);
+        int stack[64], sp = 0;
+        stack[sp++] = 0;
+        while (sp) {
+            const BvhNode& nd = nodes[stack[--sp]];
+            if (!hitBox(nd, r, inv, best)) continue;
+            if (nd.count == 0) { stack[sp++] = nd.left; stack[sp++] = nd.right; continue; }
+            for (int k = nd.first; k < nd.first + nd.count; k++) {
+                const Triangle& tr = tris[triOrder[k]];
                 Vec3 e1 = tr.p1 - tr.p0, e2 = tr.p2 - tr.p0;
                 Vec3 pv = cross(r.d, e2);
                 float det = dot(e1, pv);
                 if (std::fabs(det) < 1e-12f) continue;
-                float inv = 1.0f / det;
+                float idet = 1.0f / det;
                 Vec3 tv = r.o - tr.p0;
-                float u = dot(tv, pv) * inv;
+                float u = dot(tv, pv) * idet;
                 if (u < 0 || u > 1) continue;
                 Vec3 qv = cross(tv, e1);
-                float v = dot(r.d, qv) * inv;
+                float v = dot(r.d, qv) * idet;
                 if (v < 0 || u + v > 1) continue;
-                float t = dot(e2, qv) * inv;
+                float t = dot(e2, qv) * idet;
                 if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
             }
         }
@@ -346,8 +406,6 @@ static void addMesh(Scene& sc, const Glb& g, int meshIdx, const Mat4& world) {
         int mat = pr.has("material") ? pr["material"].i() : -1;
         if (mat < 0) { mat = (int)sc.materials.size(); sc.materials.push_back(Material{}); }
 
-        MeshInstance mi;
-        mi.first = sc.tris.size();
         for (size_t i = 0; i + 2 < idx.size(); i += 3) {
             Triangle t;
             t.p0 = wp[idx[i]]; t.p1 = wp[idx[i + 1]]; t.p2 = wp[idx[i + 2]];
@@ -355,16 +413,7 @@ static void addMesh(Scene& sc, const Glb& g, int meshIdx, const Mat4& world) {
             else { t.n0 = wn[idx[i]]; t.n1 = wn[idx[i + 1]]; t.n2 = wn[idx[i + 2]]; }
             t.material = mat;
             sc.tris.push_back(t);
-            for (const Vec3* p : {&t.p0, &t.p1, &t.p2}) {
-                mi.bmin = {std::min(mi.bmin.x, p->x), std::min(mi.bmin.y, p->y), std::min(mi.bmin.z, p->z)};
-                mi.bmax = {std::max(mi.bmax.x, p->x), std::max(mi.bmax.y, p->y), std::max(mi.bmax.z, p->z)};
-            }
         }
-        mi.count = sc.tris.size() - mi.first;
-        // pad flat/thin boxes so the slab test is robust
-        mi.bmin = mi.bmin - Vec3(EPS, EPS, EPS);
-        mi.bmax = mi.bmax + Vec3(EPS, EPS, EPS);
-        sc.meshes.push_back(mi);
     }
 }
 
@@ -382,6 +431,13 @@ static void walkNode(Scene& sc, const Glb& g, int ni, const Mat4& parent) {
     }
     Mat4 world = parent * local;
     if (n.has("mesh")) addMesh(sc, g, n["mesh"].i(), world);
+    if (n.has("camera") && !sc.camera.valid) {
+        const Json& cam = g.json["cameras"][n["camera"].i()]["perspective"];
+        sc.camera.valid = true;
+        sc.camera.world = world;
+        sc.camera.yfov = cam["yfov"].f(0.9f);
+        sc.camera.aspect = cam["aspectRatio"].f(16.0f / 9.0f);
+    }
     if (n.has("children"))
         for (size_t i = 0; i < n["children"].size(); i++) walkNode(sc, g, n["children"][i].i(), world);
 }
@@ -405,6 +461,7 @@ static Scene loadScene(const std::string& path) {
     int sceneIdx = g.json.has("scene") ? g.json["scene"].i() : 0;
     const Json& roots = g.json["scenes"][sceneIdx]["nodes"];
     for (size_t i = 0; i < roots.size(); i++) walkNode(sc, g, roots[i].i(), Mat4{});
+    sc.buildBvh();
     return sc;
 }
 
@@ -514,6 +571,17 @@ struct Camera {
         up = cross(right, forward);
         tanHalfFov = std::tan(vfovDeg * 0.5f * 3.14159265f / 180.0f);
     }
+    // glTF camera: looks down -Z, +Y up. The horizontal field of view of the file is kept,
+    // so a 16:9 camera still frames the same width in the 4:3 framebuffer.
+    explicit Camera(const CameraInfo& c) {
+        pos = c.world.point(Vec3(0, 0, 0));
+        Vec3 f = c.world.point(Vec3(0, 0, -1)) - pos;
+        Vec3 u = c.world.point(Vec3(0, 1, 0)) - pos;
+        forward = normalize(f);
+        right = normalize(cross(forward, u));
+        up = cross(right, forward);
+        tanHalfFov = std::tan(c.yfov * 0.5f) * c.aspect / ((float)WIDTH / HEIGHT);
+    }
     Ray ray(float px, float py) const {  // pixel coords, (0,0) = top-left
         float aspect = (float)WIDTH / HEIGHT;
         float sx = (2 * px / WIDTH - 1) * aspect * tanHalfFov;
@@ -538,13 +606,17 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Failed to load %s: %s\n", path.c_str(), e.what());
         return 1;
     }
-    std::printf("Loaded %s: %zu meshes, %zu triangles, %zu materials\n", path.c_str(),
-                scene.meshes.size(), scene.tris.size(), scene.materials.size());
+    std::printf("Loaded %s: %zu triangles, %zu materials, %zu BVH nodes, camera %s\n", path.c_str(),
+                scene.tris.size(), scene.materials.size(), scene.nodes.size(),
+                scene.camera.valid ? "from file" : "default");
+    std::fflush(stdout);
 
-    // The glb has no camera/lights, so they are defined here.
-    scene.light = {Vec3(-1.5f, 5.5f, 2.0f), Vec3(1.0f, 1.0f, 1.0f)};
+    // The camera comes from the glb when present; glb lights are not read yet, so one is defined here.
+    // (the point light is placed where Blender's Area_Light is: (-4, -2, 5) Z-up -> (-4, 5, 2) Y-up)
+    scene.light = {Vec3(-4.0f, 5.0f, 2.0f), Vec3(1.0f, 1.0f, 1.0f)};
     scene.ambient = Vec3(0.12f, 0.12f, 0.12f);
-    Camera cam(Vec3(1.25f, 2.6f, 6.6f), Vec3(1.25f, 1.0f, 0.0f), 60.0f);
+    Camera cam = scene.camera.valid ? Camera(scene.camera)
+                                    : Camera(Vec3(1.25f, 2.6f, 6.6f), Vec3(1.25f, 1.0f, 0.0f), 60.0f);
 
     std::vector<uint32_t> fb(WIDTH * HEIGHT, 0xFF000000u);  // ARGB8888
 
