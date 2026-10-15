@@ -63,21 +63,28 @@ inline void pngChunk(std::FILE* f, const char* type, const std::vector<uint8_t>&
     std::fwrite(crc.data(), 1, 4, f);
 }
 
+inline bool writePNG(const std::string& path, const Film& film, const Display& disp);
+inline bool writePNGRgb(const std::string& path, int w, int h, const std::vector<uint8_t>& rgb);
+
 inline bool writePNG(const std::string& path, const Film& film, const Display& disp) {
+    return writePNGRgb(path, film.w, film.h, filmToRgb8(film, disp));
+}
+
+// 8 bit RGB, w*h*3 bytes, rows top to bottom.
+inline bool writePNGRgb(const std::string& path, int w, int h, const std::vector<uint8_t>& rgb) {
     std::FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) return false;
     const uint8_t sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
     std::fwrite(sig, 1, 8, f);
     std::vector<uint8_t> ihdr;
-    put32be(ihdr, film.w); put32be(ihdr, film.h);
+    put32be(ihdr, w); put32be(ihdr, h);
     ihdr.push_back(8); ihdr.push_back(2); ihdr.push_back(0); ihdr.push_back(0); ihdr.push_back(0);  // 8bit RGB
     pngChunk(f, "IHDR", ihdr);
 
-    auto rgb = filmToRgb8(film, disp);
     std::vector<uint8_t> raw;                       // each scanline starts with filter type 0
-    for (int y = 0; y < film.h; y++) {
+    for (int y = 0; y < h; y++) {
         raw.push_back(0);
-        raw.insert(raw.end(), rgb.begin() + (size_t)y * film.w * 3, rgb.begin() + (size_t)(y + 1) * film.w * 3);
+        raw.insert(raw.end(), rgb.begin() + (size_t)y * w * 3, rgb.begin() + (size_t)(y + 1) * w * 3);
     }
     std::vector<uint8_t> z = {0x78, 0x01};          // zlib header, then stored (uncompressed) deflate blocks
     for (size_t pos = 0; pos < raw.size(); pos += 65535) {

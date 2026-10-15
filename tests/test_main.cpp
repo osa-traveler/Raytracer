@@ -6,6 +6,7 @@
 
 #include "../src/imageio.h"
 #include "../src/raytracer.h"
+#include "../src/render_job.h"
 
 static int g_checks = 0, g_failed = 0;
 
@@ -399,6 +400,77 @@ TEST(jittered_render_is_deterministic_per_seed_and_independent_of_threads) {
     CHECK(tiny > WIDTH * HEIGHT * 9 / 10);
     CHECK(large > 300 && large < 4000);
     CHECK(meanDiff / (WIDTH * HEIGHT) < 0.01);
+}
+
+// ---------------------------------------------------------------- render job (what the GUI's Render button drives)
+static RenderParams jobParams(int spp = 1) {
+    RenderParams p;
+    p.scene = std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb";
+    p.spp = spp; p.threads = 4;
+    return p;
+}
+
+TEST(render_job_matches_a_direct_render_and_can_be_restarted) {
+    RenderJob job;
+    CHECK(job.state() == RenderJob::State::Idle);
+    CHECK(job.start(jobParams(1)));
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Done);
+    CHECK(job.rowsDone() == HEIGHT);
+    CHECK(job.renderMs() > 0 && job.stats().rays > 100000);
+    // same settings rendered directly give the identical film
+    Scene sc = loadScene(jobParams().scene);
+    applyDefaultLighting(sc);
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.threads = 4; rs.spp = 1;
+    Film direct(WIDTH, HEIGHT); Stats st;
+    renderFrame(sc, cam, direct, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(*job.film(), direct));
+    // restart with other settings: fresh film, new sample count, scene is not loaded again
+    std::shared_ptr<Scene> sceneBefore = job.scene();
+    RenderParams p2 = jobParams(2); p2.jitter = true;
+    CHECK(job.start(p2));
+    job.wait();
+    CHECK(job.runs() == 2 && job.state() == RenderJob::State::Done);
+    CHECK(job.film()->count[0] == 2);
+    CHECK(job.scene() == sceneBefore);
+}
+
+TEST(render_job_refuses_to_start_while_busy_and_can_be_cancelled) {
+    RenderJob job;
+    CHECK(job.start(jobParams(64)));              // several seconds of work
+    CHECK(!job.start(jobParams(1)));              // a second start is refused while the first one runs
+    job.cancel();
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Cancelled);
+    CHECK(job.rowsDone() < HEIGHT);               // it stopped early
+    CHECK(job.runs() == 1);
+    CHECK(job.start(jobParams(1)));               // and a new render can start afterwards
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Done && job.rowsDone() == HEIGHT);
+}
+
+TEST(render_job_reports_a_missing_scene_and_recovers) {
+    RenderJob job;
+    RenderParams bad = jobParams(); bad.scene = std::string(PROJECT_DIR) + "/Scene/Test/does_not_exist.glb";
+    CHECK(job.start(bad));
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Error);
+    CHECK(job.error().find("does_not_exist.glb") != std::string::npos);
+    CHECK(job.start(jobParams()));                // the next render with a valid scene works
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Done && job.error().empty());
+}
+
+TEST(render_job_applies_max_bounces) {
+    RenderJob a, b;
+    RenderParams p0 = jobParams(); p0.maxDepth = 0;
+    RenderParams p6 = jobParams(); p6.maxDepth = 6;
+    CHECK(a.start(p0)); CHECK(b.start(p6));
+    a.wait(); b.wait();
+    CHECK(a.scene()->maxDepth == 0 && b.scene()->maxDepth == 6);
+    CHECK(!sameFilm(*a.film(), *b.film()));      // no bounces: mirror and glass spheres lose their reflections / refractions
+    CHECK(a.stats().rays < b.stats().rays);
 }
 
 int main() {

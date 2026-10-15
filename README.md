@@ -18,7 +18,8 @@ glTF バイナリ(`.glb`)のシーンを読み込み、640x480 のフレーム�
 
 ## ビルドと実行
 
-必要なもの: C++17 コンパイラ、CMake、SDL2(macOS なら `brew install sdl2 cmake`)
+必要なもの: C++17 コンパイラ、CMake 3.24 以上、SDL2(macOS なら `brew install sdl2 cmake`)。
+初回の `cmake` の設定時に、操作パネル用の Dear ImGui(MIT)を GitHub から取得します(固定バージョン + ハッシュ検証。[docs/THIRD_PARTY.md](docs/THIRD_PARTY.md))。
 
 ```sh
 cmake -S . -B build
@@ -28,8 +29,14 @@ cmake --build build
 ./build/raytrace path/to/scene.glb  # 別のシーン
 ```
 
-リポジトリのルートで実行してください。描画が終わると `output.ppm` が保存されます。
-Esc キーまたはウィンドウを閉じると終了します。
+リポジトリのルートで実行してください。ウィンドウの左に画像、右に操作パネルが出ます。
+
+![操作パネル](docs/screenshots/2026-10-15_gui-panel-first-version.png)
+
+- サンプル数、ジッタ、シード、スレッド数、最大反射回数、シーンを変えて、**Render** ボタンで再描画します。**Cancel** で中断できます。
+- 露出とガンマは、再描画なしで、その場で画像に反映されます。
+- **Save** で、画像(PNG)・線形の浮動小数(PFM)・設定と時間(JSON)を保存します。
+- Esc キーまたはウィンドウを閉じると終了します。
 
 ```sh
 # ウィンドウなしで描画し、画像(PNG)・線形の浮動小数(PFM)・設定と時間(JSON)を保存
@@ -38,6 +45,7 @@ Esc キーまたはウィンドウを閉じると終了します。
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --jitter --spp 16 --seed 1 --out out
 ./build/raytrace --rmse out.pfm other.pfm
 ./build/raytrace_tests              # テスト
+./build/raytrace --gui-selftest /tmp/gui   # 操作パネルの自動操作テスト(画面なしなら SDL_VIDEODRIVER=dummy を付ける)
 ```
 
 ## カメラとライトについて

@@ -273,6 +273,7 @@ struct Scene {
     Vec3 ambient;
     CameraInfo camera;
     AreaLight area;       // valid only if the glb defines one
+    int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting)
 
     void buildBvh() {
         size_t n = tris.size();
@@ -624,7 +625,7 @@ inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
         if (spec > 0) color += shadowTransmittance(sc, h.p, N) * sc.light.color * (spec * 2.0f);
     }
 
-    if (depth >= MAX_DEPTH) return color;
+    if (depth >= sc.maxDepth) return color;
 
     if (m.transmission > 0.0f) {
         // Dielectric: Fresnel-weighted reflection + refraction (IOR 1.5)
