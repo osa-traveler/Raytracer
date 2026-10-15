@@ -18,7 +18,7 @@ cmake --build build >/dev/null
 } > $OUT/machine.txt
 
 for sc in Room_2Spheres Untitled; do
-  ./build/raytrace Scene/Test/$sc.glb --headless --repeat 5 --out $OUT/$sc \
+  ./build/raytrace Scene/Test/$sc.glb --headless --light point --repeat 5 --out $OUT/$sc \
       --note "M0 baseline: Whitted renderer, 1 spp, scene $sc.glb"
 done
 

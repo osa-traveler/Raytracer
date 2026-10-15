@@ -18,6 +18,8 @@ struct RenderParams {
     uint64_t seed = 1;
     unsigned threads = std::max(1u, std::thread::hardware_concurrency());
     int maxDepth = MAX_DEPTH;
+    LightMode lightMode = LightMode::Area;   // Point = the M0 baseline light
+    float lightSize = 0;                      // area light edge length in metres; 0 = as in the glb
 };
 
 class RenderJob {
@@ -84,6 +86,7 @@ private:
             loadMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         }
         scene_->maxDepth = params_.maxDepth;
+        configureLight(*scene_, params_.lightMode, params_.lightSize);
         RenderSettings rs;
         rs.threads = params_.threads; rs.spp = params_.spp; rs.jitter = params_.jitter; rs.seed = params_.seed;
         state_ = State::Rendering;

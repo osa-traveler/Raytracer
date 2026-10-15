@@ -1,0 +1,16 @@
+RMSE against the area-light 1024 spp reference (linear values, whole image)
+point        0.265441
+area_1spp    0.157256
+area_4spp    0.068867
+area_16spp   0.035318
+area_64spp   0.017518
+area_256spp  0.009632
+
+render time (ms, one run) and rays per frame:
+point        92.09 ms, 852655 rays
+area_1spp    108.56 ms, 853055 rays
+area_4spp    357.11 ms, 3412138 rays
+area_16spp   1342.95 ms, 13648300 rays
+area_64spp   5394.33 ms, 54594884 rays
+area_256spp  21390.84 ms, 218380227 rays
+reference    86102.36 ms, 873528391 rays

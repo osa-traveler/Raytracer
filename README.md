@@ -11,7 +11,7 @@ glTF バイナリ(`.glb`)のシーンを読み込み、640x480 のフレーム�
   - メッシュ、ノード変換(TRS / matrix / 子ノード)、PBR 材質(baseColor / metallic / roughness)、`KHR_materials_transmission`、カメラ
 - BVH による高速化(約31万三角形のシーンを数秒で描画)
 - レイトレーシング
-  - 拡散反射 + Blinn-Phong、点光源、影(ガラスは薄い影)
+  - 拡散反射 + Blinn-Phong、**面光源(矩形をランダムにサンプリング、ソフトシャドウ)**または点光源、影(ガラスは薄い影)
   - 金属・低 roughness 材質の鏡面反射(フレネル)
   - ガラスの屈折(IOR 1.5、フレネル、全反射)
 - マルチスレッドで走査線ごとに描画し、描画の進行をウィンドウに表示
@@ -33,7 +33,7 @@ cmake --build build
 
 ![操作パネル](docs/screenshots/2026-10-15_gui-panel-first-version.png)
 
-- サンプル数、ジッタ、シード、スレッド数、最大反射回数、シーンを変えて、**Render** ボタンで再描画します。**Cancel** で中断できます。
+- サンプル数、ジッタ、シード、スレッド数、最大反射回数、光源(点 / 面)と面光源の大きさ、シーンを変えて、**Render** ボタンで再描画します。**Cancel** で中断できます。
 - 露出とガンマは、再描画なしで、その場で画像に反映されます。
 - **Save** で、画像(PNG)・線形の浮動小数(PFM)・設定と時間(JSON)を保存します。
 - Esc キーまたはウィンドウを閉じると終了します。
@@ -43,6 +43,7 @@ cmake --build build
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --repeat 5 --out experiments/test/run
 # サンプル数・ジッタ(アンチエイリアス)・乱数のシード、画像の差(RMSE)
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --jitter --spp 16 --seed 1 --out out
+./build/raytrace Scene/Test/Room_2Spheres.glb --headless --light area --light-size 0.5 --spp 64 --out out   # 小さい面光源(影がくっきり)
 ./build/raytrace --rmse out.pfm other.pfm
 ./build/raytrace_tests              # テスト
 ./build/raytrace --gui-selftest /tmp/gui   # 操作パネルの自動操作テスト(画面なしなら SDL_VIDEODRIVER=dummy を付ける)
@@ -51,7 +52,7 @@ cmake --build build
 ## カメラとライトについて
 
 - カメラ: GLB にカメラがあればそれを使います(横方向の視野を保ったまま 4:3 に描画)。なければ [src/main.cpp](src/main.cpp) の固定値を使います。
-- ライト: GLB のライトはまだ読み込まず、点光源を固定位置に置いています。Blender のエリアライトは glTF に書き出されません。
+- ライト: Blender のエリアライトは glTF に書き出されないため、Blender のカスタムプロパティ(大きさ、明るさ)を GLB の extras に出して、レンダラが読みます。面光源(矩形)をランダムにサンプリングして、ソフトシャドウを描きます。点光源(M0 の基準方式)にも切り替えられます(`--light point`)。
 
 ## シーン・アセット
 

@@ -243,6 +243,11 @@ struct BvhNode {
     int count = 0;       // leaf: number of triangles (0 for inner nodes)
 };
 
+// How direct light is computed.
+//   Point: one point light at the area light's centre, no distance falloff, hard shadows (the M0 baseline).
+//   Area:  the rectangle itself is sampled at random (M1): soft shadows, 1/d^2 falloff, one-sided emission.
+enum class LightMode { Point, Area };
+
 // Rectangular area light, defined in the glb by a node named after the Blender light plus custom properties
 // (exported as glTF "extras"): rt_light_type = "rect", rt_size_x, rt_size_y (metres), rt_radiance.
 // Blender's own light settings are not exported to glTF (AREA lights are unsupported), so these properties
@@ -272,7 +277,9 @@ struct Scene {
     PointLight light;
     Vec3 ambient;
     CameraInfo camera;
-    AreaLight area;       // valid only if the glb defines one
+    AreaLight area;       // active area light (the file's one, possibly resized by configureLight)
+    AreaLight areaFile;   // the area light exactly as the glb defines it
+    LightMode lightMode = LightMode::Point;
     int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting)
 
     void buildBvh() {
@@ -510,6 +517,7 @@ inline Scene loadScene(const std::string& path) {
     int sceneIdx = g.json.has("scene") ? g.json["scene"].i() : 0;
     const Json& roots = g.json["scenes"][sceneIdx]["nodes"];
     for (size_t i = 0; i < roots.size(); i++) walkNode(sc, g, roots[i].i(), Mat4{});
+    sc.areaFile = sc.area;
     sc.buildBvh();
     return sc;
 }
@@ -562,9 +570,44 @@ inline float schlick(float cosTheta, float f0) {
     return f0 + (1 - f0) * std::pow(1 - cosTheta, 5.0f);
 }
 
-// Fraction of light reaching `p` from the light; glass casts a faint tinted shadow.
-inline Vec3 shadowTransmittance(const Scene& sc, const Vec3& p, const Vec3& n) {
-    Vec3 toL = sc.light.pos - p;
+// Chooses the light model for a render. size > 0 rescales the area light's edges to `size` metres (square, centred
+// on the same point) while keeping its total power radiance * area constant, so changing the size changes the
+// shadow softness but not the overall brightness. size <= 0 keeps the light as the file defines it.
+inline void configureLight(Scene& sc, LightMode mode, float size) {
+    sc.lightMode = mode;
+    sc.area = sc.areaFile;
+    if (sc.areaFile.valid && size > 0) {
+        float k = size / length(sc.areaFile.edgeU);
+        sc.area.edgeU = sc.areaFile.edgeU * k;
+        sc.area.edgeV = sc.areaFile.edgeV * k;
+        sc.area.area = sc.areaFile.area * k * k;
+        sc.area.radiance = sc.areaFile.radiance / (k * k);
+    }
+}
+
+// One sample of the direct light at surface point x. `pos` is where the shadow ray goes; `weight` multiplies the
+// BRDF * cos(theta at x) term. For a point light that is just its colour. For the area light (uniform sampling of
+// the rectangle, pdf = 1 / area) it is
+//     radiance * cos(theta at the light) / distance^2 / pdf  =  radiance * area * cos(theta_light) / distance^2
+// (the cos at x stays in the shading code). Emission is one-sided: no light leaves the back of the rectangle.
+struct LightSample { Vec3 pos; Vec3 weight; };
+inline LightSample sampleLight(const Scene& sc, const Vec3& x, Sampler& smp) {
+    if (sc.lightMode == LightMode::Area && sc.area.valid) {
+        const AreaLight& a = sc.area;
+        float u = smp.next1D(), v = smp.next1D();
+        Vec3 p = a.center + a.edgeU * (u - 0.5f) + a.edgeV * (v - 0.5f);
+        Vec3 d = p - x;
+        float d2 = std::max(dot(d, d), 1e-6f);
+        float cosLight = std::max(0.0f, dot(a.normal, d * (-1.0f / std::sqrt(d2))));
+        float w = a.radiance * a.area * cosLight / d2;
+        return {p, Vec3(w, w, w)};
+    }
+    return {sc.light.pos, sc.light.color};
+}
+
+// Fraction of light reaching `p` from `target`; glass casts a faint tinted shadow.
+inline Vec3 shadowTransmittance(const Scene& sc, const Vec3& p, const Vec3& n, const Vec3& target) {
+    Vec3 toL = target - p;
     float dist = length(toL);
     Ray r{p + n * (EPS * 10), toL * (1.0f / dist)};
     Vec3 T(1, 1, 1);
@@ -582,13 +625,16 @@ inline Vec3 shadowTransmittance(const Scene& sc, const Vec3& p, const Vec3& n) {
     return T;
 }
 
+inline Vec3 shadowTransmittance(const Scene& sc, const Vec3& p, const Vec3& n) {
+    return shadowTransmittance(sc, p, n, sc.light.pos);
+}
+
 inline Vec3 background(const Ray& r) {
     float t = 0.5f * (r.d.y + 1.0f);
     return mix(Vec3(0.9f, 0.9f, 0.9f), Vec3(0.4f, 0.6f, 0.9f), t);
 }
 
 inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
-    (void)smp;   // not used yet: area-light sampling (M1 step 3) will draw its random numbers from here
     Hit h;
     if (!sc.intersect(ray, INF, h)) return background(ray);
     const Material& m = sc.materials[h.material];
@@ -598,31 +644,32 @@ inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
     Vec3 V = -ray.d;
     float cosI = std::max(0.0f, dot(N, V));
     Vec3 color(0, 0, 0);
+    LightSample ls = sampleLight(sc, h.p, smp);   // one random point on the light (Area mode) or the point light
 
     // Local lighting (diffuse + Blinn-Phong) for non-transmissive surfaces
     if (m.transmission < 1.0f) {
         Vec3 diffuseColor = m.base * (1 - m.metallic) * (1 - m.transmission);
         color += diffuseColor * sc.ambient;
-        Vec3 L = normalize(sc.light.pos - h.p);
+        Vec3 L = normalize(ls.pos - h.p);
         float nl = dot(N, L);
         if (nl > 0) {
-            Vec3 vis = shadowTransmittance(sc, h.p, N);
+            Vec3 vis = shadowTransmittance(sc, h.p, N, ls.pos);
             Vec3 Hv = normalize(L + V);
             float shininess = 2.0f / std::max(0.002f, m.roughness * m.roughness * m.roughness * m.roughness) - 2.0f;
             shininess = std::min(shininess, 2000.0f);
             float spec = std::pow(std::max(0.0f, dot(N, Hv)), shininess);
             Vec3 f0 = mix(Vec3(0.04f, 0.04f, 0.04f), m.base, m.metallic);
-            Vec3 lc = sc.light.color * vis;
+            Vec3 lc = ls.weight * vis;
             color += diffuseColor * lc * nl;
             color += f0 * lc * (spec * nl * (shininess + 8) / 25.0f);
         }
     }
     // Specular highlight on glass
     if (m.transmission > 0.0f) {
-        Vec3 L = normalize(sc.light.pos - h.p);
+        Vec3 L = normalize(ls.pos - h.p);
         Vec3 Hv = normalize(L + V);
         float spec = std::pow(std::max(0.0f, dot(N, Hv)), 800.0f);
-        if (spec > 0) color += shadowTransmittance(sc, h.p, N) * sc.light.color * (spec * 2.0f);
+        if (spec > 0) color += shadowTransmittance(sc, h.p, N, ls.pos) * ls.weight * (spec * 2.0f);
     }
 
     if (depth >= sc.maxDepth) return color;

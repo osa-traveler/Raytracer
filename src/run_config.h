@@ -39,14 +39,18 @@ inline void writeRunConfig(const std::string& path, const RenderParams& p, const
     std::fprintf(f, "  \"max_depth\": %d,\n", scene.maxDepth);
     std::fprintf(f, "  \"threads\": %u,\n", p.threads);
     std::fprintf(f, "  \"display\": {\"exposure\": %g, \"gamma\": %g, \"tone_mapping\": \"none (clamp)\"},\n", disp.exposure, disp.gamma);
-    std::fprintf(f, "  \"light\": {\"position\": [%g, %g, %g], \"color\": [%g, %g, %g], \"falloff\": \"none\"},\n",
-                 scene.light.pos.x, scene.light.pos.y, scene.light.pos.z, scene.light.color.x, scene.light.color.y, scene.light.color.z);
+    const bool areaUsed = scene.lightMode == LightMode::Area && scene.area.valid;
+    std::fprintf(f, "  \"light_mode\": \"%s\",\n", areaUsed ? "area (rectangle sampled at random, 1/d^2, one-sided)" : "point (hard shadows, no falloff)");
+    std::fprintf(f, "  \"light\": {\"position\": [%g, %g, %g], \"color\": [%g, %g, %g], \"falloff\": \"%s\"},\n",
+                 scene.light.pos.x, scene.light.pos.y, scene.light.pos.z, scene.light.color.x, scene.light.color.y, scene.light.color.z,
+                 areaUsed ? "n/a (point stand-in, not used)" : "none");
     std::fprintf(f, "  \"ambient\": [%g, %g, %g],\n", scene.ambient.x, scene.ambient.y, scene.ambient.z);
     if (scene.area.valid) {
         const AreaLight& al = scene.area;
-        std::fprintf(f, "  \"area_light\": {\"center\": [%g, %g, %g], \"edge_u\": [%g, %g, %g], \"edge_v\": [%g, %g, %g], \"normal\": [%g, %g, %g], \"area\": %g, \"radiance\": %g, \"used_for_shading\": false},\n",
+        std::fprintf(f, "  \"area_light\": {\"center\": [%g, %g, %g], \"edge_u\": [%g, %g, %g], \"edge_v\": [%g, %g, %g], \"normal\": [%g, %g, %g], \"area\": %g, \"radiance\": %g, \"power_radiance_x_area\": %g, \"edge_length_u\": %g, \"used_for_shading\": %s},\n",
                      al.center.x, al.center.y, al.center.z, al.edgeU.x, al.edgeU.y, al.edgeU.z, al.edgeV.x, al.edgeV.y, al.edgeV.z,
-                     al.normal.x, al.normal.y, al.normal.z, al.area, al.radiance);
+                     al.normal.x, al.normal.y, al.normal.z, al.area, al.radiance, al.radiance * al.area, length(al.edgeU),
+                     areaUsed ? "true" : "false");
     }
     std::fprintf(f, "  \"camera\": {\"from_file\": %s, \"position\": [%g, %g, %g], \"forward\": [%g, %g, %g], \"tan_half_fov_y\": %g},\n",
                  scene.camera.valid ? "true" : "false", cam.pos.x, cam.pos.y, cam.pos.z,

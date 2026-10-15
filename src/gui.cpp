@@ -182,6 +182,12 @@ int runGui(const GuiOptions& opt) {
         ImGui::SliderInt("threads", &threads, 1, (int)std::max(1u, std::thread::hardware_concurrency()));
         params.threads = (unsigned)threads;
         ImGui::SliderInt("max bounces", &params.maxDepth, 0, 16);
+        int lightModeIndex = params.lightMode == LightMode::Area ? 1 : 0;
+        ImGui::Combo("light", &lightModeIndex, "point (M0 baseline, hard shadow)\0area (soft shadow)\0");
+        params.lightMode = lightModeIndex == 1 ? LightMode::Area : LightMode::Point;
+        ImGui::BeginDisabled(params.lightMode != LightMode::Area);
+        ImGui::SliderFloat("light size (m)", &params.lightSize, 0.0f, 8.0f, params.lightSize <= 0 ? "as in file" : "%.2f");
+        ImGui::EndDisabled();
 
         ImGui::BeginDisabled(busy);
         if (ImGui::Button("Render", ImVec2(120, 0))) startRender();

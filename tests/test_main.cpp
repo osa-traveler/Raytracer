@@ -251,7 +251,7 @@ TEST(glb_area_light_is_read_from_node_extras) {
         CHECK_NEAR(a.center.x, -4.0, 1e-4); CHECK_NEAR(a.center.y, 5.0, 1e-4); CHECK_NEAR(a.center.z, 2.0, 1e-4);  // Blender (-4, -2, 5)
         CHECK_NEAR(length(a.edgeU), 2.0, 1e-4); CHECK_NEAR(length(a.edgeV), 2.0, 1e-4);                           // rt_size_x/y = 2 m
         CHECK_NEAR(a.area, 4.0, 1e-4);
-        CHECK_NEAR(a.radiance, 15.0, 1e-5);
+        CHECK_NEAR(a.radiance, 11.56, 1e-4);
         CHECK_NEAR(length(a.normal), 1.0, 1e-5);
         CHECK_NEAR(dot(a.edgeU, a.normal), 0.0, 1e-4); CHECK_NEAR(dot(a.edgeV, a.normal), 0.0, 1e-4);              // rectangle is perpendicular to its normal
         CHECK_NEAR(dot(a.edgeU, a.edgeV), 0.0, 1e-4);
@@ -407,6 +407,7 @@ static RenderParams jobParams(int spp = 1) {
     RenderParams p;
     p.scene = std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb";
     p.spp = spp; p.threads = 4;
+    p.lightMode = LightMode::Point;     // the tests below compare with direct renders, which default to the point light
     return p;
 }
 
@@ -471,6 +472,147 @@ TEST(render_job_applies_max_bounces) {
     CHECK(a.scene()->maxDepth == 0 && b.scene()->maxDepth == 6);
     CHECK(!sameFilm(*a.film(), *b.film()));      // no bounces: mirror and glass spheres lose their reflections / refractions
     CHECK(a.stats().rays < b.stats().rays);
+}
+
+// ---------------------------------------------------------------- area light (M1 step 3)
+// A white diffuse floor (y = 0, normal +y) and a 2 x 2 m rectangular light 5 m above its middle, facing down.
+static Scene areaFloorScene(float radiance = 10.0f, bool facingDown = true) {
+    Scene sc;
+    sc.ambient = Vec3(0, 0, 0);
+    sc.materials = {diffuseMat({1, 1, 1})};
+    sc.tris.push_back(makeTri({-50, 0, -50}, {0, 0, 50}, {50, 0, -50}));
+    AreaLight a;
+    a.valid = true;
+    a.center = Vec3(0, 5, 0);
+    a.edgeU = Vec3(2, 0, 0); a.edgeV = Vec3(0, 0, 2);
+    a.normal = Vec3(0, facingDown ? -1.0f : 1.0f, 0);
+    a.area = 4.0f; a.radiance = radiance;
+    sc.area = sc.areaFile = a;
+    sc.light = {a.center, Vec3(1, 1, 1)};
+    sc.lightMode = LightMode::Area;
+    sc.buildBvh();
+    return sc;
+}
+static const Ray kDownAtOrigin{{0, 2, 0}, {0, -1, 0}};      // starts below the blockers used in the tests (y = 2.5)
+
+// Mean of `n` area-light shading samples at the floor point under the light (first channel).
+static double meanAreaShade(const Scene& sc, int n, uint64_t seed = 5) {
+    double sum = 0;
+    for (int i = 0; i < n; i++) { Sampler smp(seed, 0, (uint32_t)i); sum += trace(sc, kDownAtOrigin, 0, smp).x; }
+    return sum / n;
+}
+
+TEST(area_light_estimator_is_unbiased_against_a_quadrature_of_point_lights) {
+    // The area light is the sum of many tiny point lights. Build that sum independently: a 100 x 100 grid of
+    // point lights, each with the weight radiance * area * cos(theta_light) / d^2 (written out here again),
+    // shaded by the point-light code path. The random estimate must converge to it.
+    Scene area = areaFloorScene();
+    Scene point = areaFloorScene(); point.lightMode = LightMode::Point;
+    Sampler smp(1, 0, 0);
+    const int G = 100;
+    double quad = 0;
+    for (int i = 0; i < G; i++)
+        for (int j = 0; j < G; j++) {
+            Vec3 p(-1 + 2 * (i + 0.5f) / G, 5, -1 + 2 * (j + 0.5f) / G);
+            float d2 = p.x * p.x + 25 + p.z * p.z;
+            float cosLight = 5.0f / std::sqrt(d2);                     // light faces straight down
+            float w = 10.0f * 4.0f * cosLight / d2;
+            point.light = {p, Vec3(w, w, w)};
+            quad += trace(point, kDownAtOrigin, 0, smp).x;
+        }
+    quad /= G * G;
+    double est = meanAreaShade(area, 40000);
+    CHECK(quad > 1.0);                                             // sanity: the floor really is lit (radiance*area/d^2 = 1.6)
+    CHECK_NEAR(est / quad, 1.0, 0.01);
+}
+
+TEST(area_light_shrinks_to_the_point_light) {
+    // A 1 cm light of the same total power gives the point light's value: radiance * area * cos / d^2 at the centre.
+    Scene sc = areaFloorScene(10.0f);
+    configureLight(sc, LightMode::Area, 0.01f);
+    Scene point = areaFloorScene(10.0f); point.lightMode = LightMode::Point;
+    float w = 10.0f * 4.0f / 25.0f;                                // cos = 1, d^2 = 25, power = radiance * area = 40
+    point.light = {Vec3(0, 5, 0), Vec3(w, w, w)};
+    Sampler smp(1, 0, 0);
+    double pointValue = trace(point, kDownAtOrigin, 0, smp).x;
+    CHECK_NEAR(meanAreaShade(sc, 200) / pointValue, 1.0, 1e-3);
+}
+
+TEST(area_light_half_blocked_gives_half_the_light) {
+    // A blocker plane at y = 2.5 covering x > 0: from the floor point below the light it hides exactly the
+    // half of the rectangle with x > 0 (rays cross y = 2.5 at half the light's x).
+    Scene open = areaFloorScene();
+    Scene half = areaFloorScene();
+    half.materials.push_back(diffuseMat({0.2f, 0.2f, 0.2f}));
+    half.tris.push_back(makeTri({0, 2.5f, -40}, {0, 2.5f, 40}, {40, 2.5f, 0}, 1));
+    half.buildBvh();
+    Scene covered = areaFloorScene();
+    covered.materials.push_back(diffuseMat({0.2f, 0.2f, 0.2f}));
+    covered.tris.push_back(makeTri({-40, 2.5f, -40}, {0, 2.5f, 40}, {40, 2.5f, -40}, 1));
+    covered.buildBvh();
+    double full = meanAreaShade(open, 20000);
+    CHECK_NEAR(meanAreaShade(half, 20000) / full, 0.5, 0.02);      // penumbra: half of the light is visible
+    CHECK(meanAreaShade(covered, 2000) == 0.0);                    // umbra: nothing reaches the floor
+}
+
+TEST(area_light_emits_from_its_front_side_only) {
+    Scene lit = areaFloorScene(10.0f, true), back = areaFloorScene(10.0f, false);
+    CHECK(meanAreaShade(lit, 100) > 1.0);
+    CHECK(meanAreaShade(back, 100) == 0.0);                        // the floor is behind the light: no light, ambient is 0
+}
+
+TEST(area_light_resizing_keeps_the_total_power) {
+    Scene sc = areaFloorScene(10.0f);
+    for (float size : {0.5f, 2.0f, 6.0f}) {
+        configureLight(sc, LightMode::Area, size);
+        CHECK_NEAR(length(sc.area.edgeU), size, 1e-5); CHECK_NEAR(length(sc.area.edgeV), size, 1e-5);
+        CHECK_NEAR(sc.area.area, size * size, 1e-4);
+        CHECK_NEAR(sc.area.radiance * sc.area.area, 40.0, 1e-3);   // power = radiance * area stays 10 * 4
+        CHECK_NEAR(sc.area.center.y, 5.0, 1e-6);                   // same centre
+    }
+    configureLight(sc, LightMode::Area, 0);                         // 0 = back to the file's light
+    CHECK_NEAR(sc.area.area, 4.0, 1e-6); CHECK_NEAR(sc.area.radiance, 10.0, 1e-6);
+}
+
+TEST(glb_area_light_is_calibrated_to_the_old_point_light) {
+    // rt_radiance in the glb was chosen so that the middle of the room floor gets, averaged over the whole rectangle,
+    // the same light as the M0 point light (colour 1): the mean weight there should be about 1.
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    configureLight(sc, LightMode::Area, 0);
+    double sum = 0;
+    const int N = 5000;
+    for (int i = 0; i < N; i++) { Sampler smp(3, 0, (uint32_t)i); sum += sampleLight(sc, Vec3(0, 0, 0), smp).weight.x; }
+    CHECK_NEAR(sum / N, 1.0, 0.01);
+}
+
+TEST(area_light_render_is_deterministic_and_independent_of_threads) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    applyDefaultLighting(sc);
+    configureLight(sc, LightMode::Area, 0);
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.spp = 2; rs.jitter = false;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT), c(WIDTH, HEIGHT);
+    Stats st;
+    rs.threads = 1; rs.seed = 1; renderFrame(sc, cam, a, rs, nullptr, nullptr, st);
+    rs.threads = 6; rs.seed = 1; renderFrame(sc, cam, b, rs, nullptr, nullptr, st);
+    rs.threads = 6; rs.seed = 2; renderFrame(sc, cam, c, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(a, b));          // random light samples, still independent of the thread count
+    CHECK(!sameFilm(a, c));         // and different with another seed (even without pixel jitter)
+}
+
+TEST(render_job_area_mode_matches_a_direct_area_render) {
+    RenderJob job;
+    RenderParams p = jobParams(2); p.lightMode = LightMode::Area; p.lightSize = 3.0f; p.seed = 9;
+    CHECK(job.start(p));
+    job.wait();
+    Scene sc = loadScene(p.scene);
+    applyDefaultLighting(sc);
+    configureLight(sc, LightMode::Area, 3.0f);
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.threads = 3; rs.spp = 2; rs.seed = 9;
+    Film direct(WIDTH, HEIGHT); Stats st;
+    renderFrame(sc, cam, direct, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(*job.film(), direct));
 }
 
 int main() {

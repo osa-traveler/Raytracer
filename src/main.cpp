@@ -5,6 +5,7 @@
 //
 // Options (initial values of the panel, or the settings of a headless render):
 //   --spp N  --jitter  --seed N  --threads N  --max-depth N  --exposure X  --gamma X
+//   --light point|area  --light-size METRES   (area = soft shadows; point = the M0 baseline; size 0 = as in the glb)
 // Headless only:
 //   --out PREFIX    write PREFIX.png (display image), PREFIX.pfm (linear float film), PREFIX.json (settings, timings, counters)
 //                   (without --out the image is saved as output.ppm)
@@ -44,6 +45,8 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--jitter") p.jitter = true;
         else if (a == "--seed" && (v = next())) p.seed = (uint64_t)std::strtoull(v, nullptr, 10);
         else if (a == "--max-depth" && (v = next())) p.maxDepth = std::max(0, std::atoi(v));
+        else if (a == "--light" && (v = next())) p.lightMode = std::string(v) == "point" ? LightMode::Point : LightMode::Area;
+        else if (a == "--light-size" && (v = next())) p.lightSize = (float)std::atof(v);
         else if (a == "--screenshot" && (v = next())) o.gui.screenshot = v;
         else if (a == "--gui-selftest" && (v = next())) o.gui.selfTest = v;
         else if (a.rfind("--", 0) != 0) p.scene = a;
@@ -69,6 +72,7 @@ static int runHeadless(const Options& opt) {
     double loadMs = ms(t0, std::chrono::steady_clock::now());
     applyDefaultLighting(scene);
     scene.maxDepth = p.maxDepth;
+    configureLight(scene, p.lightMode, p.lightSize);
     Camera cam = makeCamera(scene);
     std::printf("Loaded %s: %zu triangles, %zu materials, %zu BVH nodes, camera %s (%.0f ms)\n", p.scene.c_str(),
                 scene.tris.size(), scene.materials.size(), scene.nodes.size(), scene.camera.valid ? "from file" : "default", loadMs);
