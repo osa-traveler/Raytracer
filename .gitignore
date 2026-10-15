@@ -34,3 +34,11 @@ experiments/2026-10-15_light-size-spp/*.png
 # silhouette-fix experiment: keep the comparison image and the numbers, not every full-size PNG
 experiments/2026-10-15_silhouette-fix/*.png
 !experiments/2026-10-15_silhouette-fix/before_after.png
+
+# Release build used for rendering and timing (build/ may be a Debug build for debugging)
+build-release/
+
+# M2 / M3 / M4 experiments: the key images are in docs/screenshots/; run.sh regenerates the rest (and the .pfm films)
+experiments/2026-10-15_m2-cornell/*.png
+experiments/2026-10-15_m3-progressive/*.png
+experiments/2026-10-15_m4-nee/*.png

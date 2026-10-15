@@ -1,0 +1,33 @@
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 3372.0 ms
+Saved experiments/2026-10-15_m2-cornell/classic.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 28331.9 ms
+Saved experiments/2026-10-15_m2-cornell/path_d0.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 81631.9 ms
+Saved experiments/2026-10-15_m2-cornell/path_d1.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 103194.4 ms
+Saved experiments/2026-10-15_m2-cornell/path_d2.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 126937.3 ms
+Saved experiments/2026-10-15_m2-cornell/path_d4.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 181852.1 ms
+Saved experiments/2026-10-15_m2-cornell/path_d8.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 688.0 ms
+Saved experiments/2026-10-15_m2-cornell/path_spp1.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 3008.0 ms
+Saved experiments/2026-10-15_m2-cornell/path_spp4.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 11381.3 ms
+Saved experiments/2026-10-15_m2-cornell/path_spp16.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 44983.2 ms
+Saved experiments/2026-10-15_m2-cornell/path_spp64.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 178229.5 ms
+Saved experiments/2026-10-15_m2-cornell/path_spp256.png / .pfm / .json

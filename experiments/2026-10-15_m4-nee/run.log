@@ -1,0 +1,33 @@
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 1094505.8 ms
+Saved experiments/2026-10-15_m4-nee/reference_nee_1024.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 1055.3 ms
+Saved experiments/2026-10-15_m4-nee/nee_spp1.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 707.6 ms
+Saved experiments/2026-10-15_m4-nee/plain_spp1.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 4282.1 ms
+Saved experiments/2026-10-15_m4-nee/nee_spp4.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 2802.3 ms
+Saved experiments/2026-10-15_m4-nee/plain_spp4.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 18263.0 ms
+Saved experiments/2026-10-15_m4-nee/nee_spp16.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 11624.6 ms
+Saved experiments/2026-10-15_m4-nee/plain_spp16.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 67766.5 ms
+Saved experiments/2026-10-15_m4-nee/nee_spp64.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 45368.9 ms
+Saved experiments/2026-10-15_m4-nee/plain_spp64.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 274263.9 ms
+Saved experiments/2026-10-15_m4-nee/nee_spp256.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 183428.9 ms
+Saved experiments/2026-10-15_m4-nee/plain_spp256.png / .pfm / .json

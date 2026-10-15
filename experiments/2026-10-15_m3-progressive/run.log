@@ -1,0 +1,11 @@
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+  pass: 1 spp  (1015.7 ms)
+  pass: 4 spp  (4330.6 ms)
+  pass: 16 spp  (16904.3 ms)
+  pass: 64 spp  (68378.5 ms)
+  pass: 256 spp  (286281.3 ms)
+render 1/1: 286336.9 ms
+Saved experiments/2026-10-15_m3-progressive/cornell_nee.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 345626.9 ms
+Saved experiments/2026-10-15_m3-progressive/cornell_nee_single_pass.png / .pfm / .json
