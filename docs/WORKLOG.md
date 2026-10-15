@@ -9,6 +9,12 @@
 - 未確認: ウィンドウでの実機操作(設定変更の自動リセット、+ samples)。M2〜M3 の実験の時間は Debug の値(Release で測り直す)。
 - 次: M4 の残り(Russian Roulette → PDF の計算と MIS)。Path 方式に鏡・ガラスを入れる(delta 成分の分岐)のは、そのあと。
 
+### 解説ドキュメントと BSDF サンプリングの図
+- 開発中の疑問(spp とノイズ、放射輝度、Whitted と Path の違い、拡散面の散乱、BSDF、NEE が嘘でない理由、プログレッシブ、ビルドの種類、M4 の残り)を、[RENDERING_GUIDE.md](RENDERING_GUIDE.md) にまとめた。用語集つき。
+- 反射方向の選ばれやすさの図(拡散面 / 鏡 / つやのある面。面の断面、線の長さ = 選ばれやすさ)。拡散面は法線方向がピーク(確率 ∝ cos θ、ピーク 0.32)、鏡は反射方向の1本だけ、つやのある面は鏡面反射の方向に集中(Phong 型 n = 40 の例、ピーク 6.5)。3つは形を比べやすいよう最大の長さをそろえて描いてある。いまの Path 方式が使うのは、拡散面だけ。鏡・つやのある面は M7 で入る。描画は `tools/plot_bsdf_sampling.py`(matplotlib が必要)。
+
+![反射方向の選ばれやすさ](screenshots/2026-10-15_bsdf-sampling-directions.png)
+
 ### ビルドの種類(Debug だった)
 - **発見**: `build/` は `CMAKE_BUILD_TYPE=Debug`(`-g` だけ、最適化なし)で設定されていた。CMakeLists は未指定のときだけ Release にするので、指定済みの Debug がそのまま使われていた。**M2・NEE・M3 の実験の描画時間(WORKLOG の下の記録)は、すべて Debug の値**。M0 の基準(`experiments/2026-10-15_baseline/`)は、JSON に Release と記録されている。
 - **測定**(Cornell Box、path、8回反射、ジッタ、16 spp、同じ画像): Debug 34.3 s、Release(`-O3 -DNDEBUG`)3.1 s → **約11倍**。画像はバイト単位で同一。

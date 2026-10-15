@@ -81,5 +81,6 @@ cmake --build build-release
 
 - [docs/WORKFLOW.md](docs/WORKFLOW.md): 進め方のルール
 - [docs/WORKLOG.md](docs/WORKLOG.md): 作業ログ
+- [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md): レンダリングの考え方の解説(spp とノイズ、パストレーシング、BSDF、NEE など。図・用語集つき)
 - [docs/CURRENT_IMPLEMENTATION.md](docs/CURRENT_IMPLEMENTATION.md): 現在の実装
 - [docs/RENDERER_ROADMAP.md](docs/RENDERER_ROADMAP.md): ロードマップ
