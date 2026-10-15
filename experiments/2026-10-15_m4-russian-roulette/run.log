@@ -1,0 +1,31 @@
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+  pass: 1 spp  (77.9 ms)
+  pass: 4 spp  (290.5 ms)
+  pass: 16 spp  (1067.2 ms)
+  pass: 64 spp  (4196.3 ms)
+  pass: 256 spp  (16451.3 ms)
+  pass: 1024 spp  (64959.7 ms)
+  pass: 2048 spp  (387561.5 ms)
+render 1/1: 387571.2 ms
+Saved experiments/2026-10-15_m4-russian-roulette/reference.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+  pass: 1 spp  (97.3 ms)
+  pass: 4 spp  (401.0 ms)
+  pass: 16 spp  (1553.7 ms)
+  pass: 64 spp  (6172.8 ms)
+render 1/1: 6182.5 ms
+Saved experiments/2026-10-15_m4-russian-roulette/off_cap8.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+  pass: 1 spp  (140.1 ms)
+  pass: 4 spp  (577.2 ms)
+  pass: 16 spp  (2324.8 ms)
+  pass: 64 spp  (9175.6 ms)
+render 1/1: 9185.8 ms
+Saved experiments/2026-10-15_m4-russian-roulette/off_cap64.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+  pass: 1 spp  (78.0 ms)
+  pass: 4 spp  (330.3 ms)
+  pass: 16 spp  (1310.9 ms)
+  pass: 64 spp  (4378.8 ms)
+render 1/1: 4388.5 ms
+Saved experiments/2026-10-15_m4-russian-roulette/on_cap64.png / .pfm / .json

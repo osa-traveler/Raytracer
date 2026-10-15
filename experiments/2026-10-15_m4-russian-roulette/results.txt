@@ -1,0 +1,4 @@
+light    render            time [s]         rays  shadow rays      RMSE   efficiency
+         off_cap64             9.19    175151675     64933700    0.0242        186.4
+         off_cap8              6.18    124465122     43715221    0.0242        277.2
+         on_cap64              4.39     87826297     31252565    0.0247        374.9

@@ -1,0 +1,36 @@
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 998873.2 ms
+Saved experiments/2026-10-15_m4-mis/ref_size0.15.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 4339.4 ms
+Saved experiments/2026-10-15_m4-mis/bsdf_size0.15.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 6380.6 ms
+Saved experiments/2026-10-15_m4-mis/nee_size0.15.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 6429.0 ms
+Saved experiments/2026-10-15_m4-mis/mis_size0.15.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 144428.4 ms
+Saved experiments/2026-10-15_m4-mis/ref_size0.5.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (1 ms)
+render 1/1: 7866.1 ms
+Saved experiments/2026-10-15_m4-mis/bsdf_size0.5.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 6594.8 ms
+Saved experiments/2026-10-15_m4-mis/nee_size0.5.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 6671.6 ms
+Saved experiments/2026-10-15_m4-mis/mis_size0.5.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 119523.1 ms
+Saved experiments/2026-10-15_m4-mis/ref_size1.5.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 3985.4 ms
+Saved experiments/2026-10-15_m4-mis/bsdf_size1.5.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 6538.4 ms
+Saved experiments/2026-10-15_m4-mis/nee_size1.5.png / .pfm / .json
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 15 BVH nodes, camera from file (0 ms)
+render 1/1: 6538.9 ms
+Saved experiments/2026-10-15_m4-mis/mis_size1.5.png / .pfm / .json
