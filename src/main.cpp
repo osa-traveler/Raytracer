@@ -5,9 +5,12 @@
 //
 // Options (initial values of the panel, or the settings of a headless render):
 //   --spp N  --jitter  --seed N  --threads N  --max-depth N  --exposure X  --gamma X
+//   --integrator classic|path  --env X  --no-nee   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
 //   --legacy-normals   (M0 behaviour at silhouettes: reproduces the M0 baseline images bit for bit)
 //   --light point|area  --light-size METRES   (area = soft shadows; point = the M0 baseline; size 0 = as in the glb)
 // Headless only:
+//   --progressive / --no-progressive   (the window defaults to progressive, headless to not)
+//   --progressive   render in passes of 1, 4, 16, ... spp up to --spp; with --out also writes PREFIX_sppN.png after each pass
 //   --out PREFIX    write PREFIX.png (display image), PREFIX.pfm (linear float film), PREFIX.json (settings, timings, counters)
 //                   (without --out the image is saved as output.ppm)
 //   --repeat N      render N times to record timings
@@ -27,6 +30,7 @@ struct Options {
     std::string out;
     bool headless = false;
     int repeat = 1;
+    bool progressiveSet = false;   // the window renders progressively unless told otherwise; headless renders do not
 };
 
 static bool parseArgs(int argc, char** argv, Options& o) {
@@ -48,6 +52,11 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--max-depth" && (v = next())) p.maxDepth = std::max(0, std::atoi(v));
         else if (a == "--light" && (v = next())) p.lightMode = std::string(v) == "point" ? LightMode::Point : LightMode::Area;
         else if (a == "--light-size" && (v = next())) p.lightSize = (float)std::atof(v);
+        else if (a == "--integrator" && (v = next())) p.integrator = std::string(v) == "path" ? Integrator::Path : Integrator::Classic;
+        else if (a == "--progressive") { p.progressive = true; o.progressiveSet = true; }
+        else if (a == "--no-progressive") { p.progressive = false; o.progressiveSet = true; }
+        else if (a == "--no-nee") p.nee = false;
+        else if (a == "--env" && (v = next())) p.envScale = (float)std::atof(v);
         else if (a == "--legacy-normals") p.legacyNormals = true;
         else if (a == "--screenshot" && (v = next())) o.gui.screenshot = v;
         else if (a == "--gui-selftest" && (v = next())) o.gui.selfTest = v;
@@ -76,6 +85,9 @@ static int runHeadless(const Options& opt) {
     scene.maxDepth = p.maxDepth;
     configureLight(scene, p.lightMode, p.lightSize);
     scene.legacyNormals = p.legacyNormals;
+    scene.integrator = p.integrator;
+    scene.envScale = p.envScale;
+    scene.nee = p.nee;
     Camera cam = makeCamera(scene);
     std::printf("Loaded %s: %zu triangles, %zu materials, %zu BVH nodes, camera %s (%.0f ms)\n", p.scene.c_str(),
                 scene.tris.size(), scene.materials.size(), scene.nodes.size(), scene.camera.valid ? "from file" : "default", loadMs);
@@ -90,7 +102,18 @@ static int runHeadless(const Options& opt) {
         Film f(WIDTH, HEIGHT);
         Stats s;
         auto a = std::chrono::steady_clock::now();
-        renderFrame(scene, cam, f, rs, nullptr, nullptr, s);
+        if (p.progressive) {       // passes of 1, 4, 16, ... spp into one film; the result equals a single pass of p.spp
+            for (int done = 0; done < p.spp;) {
+                int total = nextPassTotal(done, p.spp);
+                RenderSettings pass = rs; pass.firstSample = done; pass.spp = total - done;
+                renderFrame(scene, cam, f, pass, nullptr, nullptr, s);
+                done = total;
+                std::printf("  pass: %d spp  (%.1f ms)\n", done, ms(a, std::chrono::steady_clock::now()));
+                if (!opt.out.empty()) writePNG(opt.out + "_spp" + std::to_string(done) + ".png", f, opt.gui.display);
+            }
+        } else {
+            renderFrame(scene, cam, f, rs, nullptr, nullptr, s);
+        }
         times.push_back(ms(a, std::chrono::steady_clock::now()));
         film = std::move(f); stats = s;
         std::printf("render %d/%d: %.1f ms\n", r + 1, opt.repeat, times.back());
@@ -113,5 +136,6 @@ int main(int argc, char** argv) {
     }
     Options opt;
     if (!parseArgs(argc, argv, opt)) return 1;
+    if (!opt.headless && !opt.progressiveSet) opt.gui.params.progressive = true;
     return opt.headless ? runHeadless(opt) : runGui(opt.gui);
 }

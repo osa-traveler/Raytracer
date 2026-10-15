@@ -710,6 +710,263 @@ TEST(geometric_normal_follows_the_vertex_normals_not_the_winding) {
     }
 }
 
+// ---------------------------------------------------------------- path tracing (M2)
+TEST(cosine_hemisphere_sampling_has_the_cosine_distribution) {
+    Sampler smp(3, 0, 0);
+    const int n = 200000;
+    for (Vec3 normal : {Vec3(0, 1, 0), normalize(Vec3(1, 2, -0.5f)), Vec3(1, 0, 0)}) {
+        double c1 = 0, c2 = 0; int below = 0;
+        for (int i = 0; i < n; i++) {
+            Vec3 d = sampleCosineHemisphere(normal, smp.next1D(), smp.next1D());
+            float c = dot(d, normal);
+            below += c < 0; c1 += c; c2 += c * c;
+            if (i == 0) CHECK_NEAR(length(d), 1.0, 1e-5);
+        }
+        CHECK(below == 0);
+        CHECK_NEAR(c1 / n, 2.0 / 3.0, 0.005);     // E[cos] for pdf cos/pi
+        CHECK_NEAR(c2 / n, 0.5, 0.005);           // E[cos^2]
+    }
+}
+
+TEST(area_light_intersection_is_one_sided_and_bounded) {
+    AreaLight a; a.valid = true;
+    a.center = Vec3(0, 5, 0); a.edgeU = Vec3(2, 0, 0); a.edgeV = Vec3(0, 0, 2); a.normal = Vec3(0, -1, 0);
+    CHECK_NEAR(intersectAreaLight(a, Ray{{0, 0, 0}, {0, 1, 0}}), 5.0, 1e-5);       // from below, the emitting side
+    CHECK_NEAR(intersectAreaLight(a, Ray{{0.9f, 0, -0.9f}, {0, 1, 0}}), 5.0, 1e-5);
+    CHECK(intersectAreaLight(a, Ray{{1.1f, 0, 0}, {0, 1, 0}}) < 0);                 // beside the rectangle
+    CHECK(intersectAreaLight(a, Ray{{0, 9, 0}, {0, -1, 0}}) < 0);                   // from above: the back emits nothing
+    CHECK(intersectAreaLight(a, Ray{{0, 6, 0}, {0, 1, 0}}) < 0);                    // rectangle behind the origin
+}
+
+// A floor of albedo rho under a huge light facing down: the form factor is ~1, so radiance leaving the floor is
+// rho * Le after one bounce, and (the light is the only thing above) nothing more however many bounces are allowed.
+static Scene pathFloorScene(float rho, float Le) {
+    Scene sc;
+    sc.materials = {diffuseMat({rho, rho, rho})};
+    sc.tris.push_back(makeTri({-50, 0, -50}, {0, 0, 50}, {50, 0, -50}));
+    AreaLight a; a.valid = true; a.center = Vec3(0, 1, 0);
+    a.edgeU = Vec3(2000, 0, 0); a.edgeV = Vec3(0, 0, 2000); a.normal = Vec3(0, -1, 0); a.area = 4e6f; a.radiance = Le;
+    sc.area = sc.areaFile = a;
+    sc.integrator = Integrator::Path;
+    sc.buildBvh();
+    return sc;
+}
+static double meanPath(const Scene& sc, const Ray& r, int n) {
+    double sum = 0;
+    for (int i = 0; i < n; i++) { Sampler smp(11, 0, (uint32_t)i); sum += pathTrace(sc, r, smp).x; }
+    return sum / n;
+}
+
+TEST(path_tracer_matches_the_analytic_radiance_of_a_floor_under_a_huge_light) {
+    Scene sc = pathFloorScene(0.5f, 2.0f);
+    sc.nee = false;
+    Ray down{{0, 0.5f, 0}, {0, -1, 0}};
+    sc.maxDepth = 0; CHECK_NEAR(meanPath(sc, down, 1000), 0.0, 1e-9);             // 0 bounces: the floor itself does not emit
+    sc.maxDepth = 1; CHECK_NEAR(meanPath(sc, down, 20000), 0.5 * 2.0 * 0.999, 0.01);   // rho * Le * form factor
+    sc.maxDepth = 6; CHECK_NEAR(meanPath(sc, down, 20000), 0.5 * 2.0 * 0.999, 0.01);   // the extra bounces find nothing new
+    CHECK_NEAR(meanPath(sc, Ray{{0, 0.5f, 0}, {0, 1, 0}}, 10), 2.0, 1e-5);        // looking straight at the light sees Le
+    sc.envScale = 0; Ray away{{0, 0.5f, 0}, {1, 0, 0}};
+    CHECK_NEAR(meanPath(sc, away, 10), 0.0, 1e-9);                                 // escapes into a black sky
+    sc.envScale = 1; CHECK(meanPath(sc, away, 10) > 0.3);                          // with sky light it sees the gradient
+}
+
+TEST(path_tracer_adds_light_with_every_allowed_bounce) {
+    // On the Cornell box: the radiance seen on the floor grows with the bounce limit, and is 0 at 0 bounces.
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path;
+    Camera cam = makeCamera(sc);
+    Ray r = cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f);                                 // floor in front of the boxes
+    double prev = -1;
+    for (int depth : {0, 1, 2, 4}) {
+        sc.maxDepth = depth;
+        double m = meanPath(sc, r, 20000);
+        CHECK(m >= prev - 0.002);                                                  // more bounces never lose light
+        if (depth == 0) CHECK_NEAR(m, 0.0, 1e-9);
+        if (depth == 2) CHECK(m > prev * 1.05);                                    // and indirect light is really added
+        prev = m;
+    }
+}
+
+TEST(path_render_is_deterministic_and_independent_of_threads) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.maxDepth = 3;
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.spp = 1; rs.jitter = true;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT), c(WIDTH, HEIGHT);
+    Stats st;
+    rs.threads = 1; rs.seed = 4; renderFrame(sc, cam, a, rs, nullptr, nullptr, st);
+    rs.threads = 5; rs.seed = 4; renderFrame(sc, cam, b, rs, nullptr, nullptr, st);
+    rs.threads = 5; rs.seed = 5; renderFrame(sc, cam, c, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(a, b));
+    CHECK(!sameFilm(a, c));
+}
+
+TEST(cornell_box_shows_colour_bleeding_only_with_bounces) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path;
+    // A point on the white back wall near the red left wall: indirect light from the red wall tints it red.
+    Ray r{{-0.8f, 1.0f, 3.0f}, normalize(Vec3(0, 0, -1))};
+    sc.maxDepth = 1; Vec3 one(0, 0, 0), four(0, 0, 0);
+    const int n = 40000;
+    for (int i = 0; i < n; i++) { Sampler s(2, 0, (uint32_t)i); one += pathTrace(sc, r, s); }
+    sc.maxDepth = 6;
+    for (int i = 0; i < n; i++) { Sampler s(2, 0, (uint32_t)i); four += pathTrace(sc, r, s); }
+    CHECK(four.x > one.x);                                              // more light with more bounces
+    CHECK(four.x / four.y > one.x / one.y);                             // and redder: red/green ratio grows
+}
+
+// Mean and standard error of the first channel over n path samples.
+static void meanAndSe(const Scene& sc, const Ray& r, int n, double& mean, double& se, uint64_t seed = 21) {
+    double s1 = 0, s2 = 0;
+    for (int i = 0; i < n; i++) { Sampler smp(seed, 0, (uint32_t)i); double x = pathTrace(sc, r, smp).x; s1 += x; s2 += x * x; }
+    mean = s1 / n; se = std::sqrt(std::max(0.0, s2 / n - mean * mean) / n);
+}
+
+TEST(nee_matches_a_quadrature_of_the_floor_radiance) {
+    // Floor (albedo 0.5) under a 20 m x 20 m light (Le = 2) at height 1: radiance = rho/pi * Le * integral of
+    // cos(x) cos(light) / d^2 dA, computed here on a fine grid.
+    Scene sc = pathFloorScene(0.5f, 2.0f);
+    AreaLight& a = sc.area; a.edgeU = Vec3(20, 0, 0); a.edgeV = Vec3(0, 0, 20); a.area = 400;
+    sc.areaFile = a;
+    double ff = 0; const int g = 1000;
+    for (int i = 0; i < g; i++) for (int j = 0; j < g; j++) {
+        double x = (i + 0.5) / g * 20 - 10, z = (j + 0.5) / g * 20 - 10, d2 = x * x + z * z + 1;
+        ff += (1.0 / d2) * (1.0 / d2) / 3.14159265358979 * (400.0 / (g * g));       // cos(x) = cos(light) = 1/d
+    }
+    double expected = 0.5 * 2.0 * ff;
+    sc.nee = true;
+    Ray down{{0, 0.5f, 0}, {0, -1, 0}};
+    double m, se;
+    sc.maxDepth = 0; meanAndSe(sc, down, 100, m, se); CHECK_NEAR(m, 0.0, 1e-9);
+    sc.maxDepth = 1; meanAndSe(sc, down, 40000, m, se); CHECK(std::fabs(m - expected) < 4 * se + 1e-4);
+    sc.maxDepth = 5; meanAndSe(sc, down, 40000, m, se); CHECK(std::fabs(m - expected) < 4 * se + 1e-4);   // counted once, not once per bounce
+    CHECK_NEAR(meanPath(sc, Ray{{0, 0.5f, 0}, {0, 1, 0}}, 10), 2.0, 1e-5);          // the camera ray still sees the emitter
+}
+
+TEST(nee_and_plain_path_tracing_have_the_same_expectation_at_every_bounce_limit) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path;
+    Camera cam = makeCamera(sc);
+    for (Ray r : {cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f),        // floor
+                  cam.ray(WIDTH * 0.2f, HEIGHT * 0.5f),        // red wall
+                  cam.ray(WIDTH / 2.0f, HEIGHT * 0.15f)}) {    // ceiling / back wall
+        for (int depth : {1, 2, 3}) {
+            sc.maxDepth = depth;
+            double mp, sp, mn, sn;
+            sc.nee = false; meanAndSe(sc, r, 60000, mp, sp);
+            sc.nee = true;  meanAndSe(sc, r, 60000, mn, sn);
+            CHECK(std::fabs(mp - mn) < 5 * std::sqrt(sp * sp + sn * sn) + 1e-4);          // agree within 5 standard errors
+        }
+    }
+}
+
+TEST(nee_has_much_less_noise_than_plain_path_tracing) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.maxDepth = 1;
+    Camera cam = makeCamera(sc);
+    Ray r = cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f);
+    double mp, sp, mn, sn;
+    sc.nee = false; meanAndSe(sc, r, 20000, mp, sp);
+    sc.nee = true;  meanAndSe(sc, r, 20000, mn, sn);
+    CHECK(sn * 3 < sp);                                                                  // standard error at least 3x smaller
+}
+
+// ---------------------------------------------------------------- progressive rendering (M3)
+TEST(progressive_schedule_is_1_4_16_64_and_ends_exactly_at_the_target) {
+    std::vector<int> totals;
+    for (int done = 0; done < 100;) { done = nextPassTotal(done, 100); totals.push_back(done); }
+    CHECK(totals == (std::vector<int>{1, 4, 16, 64, 100}));
+    totals.clear();
+    for (int done = 0; done < 64;) { done = nextPassTotal(done, 64); totals.push_back(done); }
+    CHECK(totals == (std::vector<int>{1, 4, 16, 64}));
+    CHECK(nextPassTotal(0, 1) == 1);
+    CHECK(nextPassTotal(5, 8) == 8);        // continuing from an arbitrary total never overshoots
+}
+
+TEST(rendering_in_passes_gives_exactly_the_film_of_a_single_pass) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.maxDepth = 2;
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.threads = 4; rs.jitter = true; rs.seed = 8;
+    Film whole(WIDTH, HEIGHT), parts(WIDTH, HEIGHT);
+    Stats st;
+    rs.spp = 5; renderFrame(sc, cam, whole, rs, nullptr, nullptr, st);
+    for (auto range : {std::pair<int, int>{0, 1}, {1, 4}, {4, 5}}) {
+        rs.firstSample = range.first; rs.spp = range.second - range.first;
+        renderFrame(sc, cam, parts, rs, nullptr, nullptr, st);
+    }
+    CHECK(sameFilm(whole, parts));          // bit for bit: the same samples are summed in the same order
+    CHECK(parts.count[0] == 5);
+}
+
+TEST(progressive_render_job_publishes_every_pass_and_equals_a_direct_render) {
+    RenderParams p = jobParams(20); p.progressive = true; p.jitter = true; p.lightMode = LightMode::Area; p.seed = 3;
+    RenderJob job;
+    CHECK(job.start(p));
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Done);
+    CHECK(job.doneSpp() == 20 && job.targetSpp() == 20);
+    CHECK(job.passes() == 4);                                    // 1, 4, 16, 20
+    auto log = job.passLog();
+    CHECK(log.size() == 4 && log[0].spp == 1 && log[1].spp == 4 && log[2].spp == 16 && log[3].spp == 20);
+    CHECK(log[0].ms <= log[1].ms && log[1].ms <= log[2].ms && log[2].ms <= log[3].ms);
+    std::vector<Vec3> snap;
+    CHECK(job.copySnapshot(snap) == 4 && snap.size() == (size_t)WIDTH * HEIGHT);
+    bool snapMatches = true;
+    for (int y = 0; y < HEIGHT && snapMatches; y += 7) for (int x = 0; x < WIDTH; x += 5) {
+        Vec3 a = snap[(size_t)y * WIDTH + x], b = job.film()->pixel(x, y);
+        snapMatches = a.x == b.x && a.y == b.y && a.z == b.z;
+    }
+    CHECK(snapMatches);                                          // the published image is the film's mean
+
+    Scene sc = loadScene(p.scene);
+    applyDefaultLighting(sc);
+    configureLight(sc, LightMode::Area, 0);
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.threads = 4; rs.spp = 20; rs.jitter = true; rs.seed = 3;
+    Film direct(WIDTH, HEIGHT); Stats st;
+    renderFrame(sc, cam, direct, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(*job.film(), direct));                        // passes or not, the same image
+}
+
+TEST(progressive_render_job_can_add_samples_without_resetting) {
+    RenderParams p = jobParams(4); p.progressive = true; p.jitter = true; p.lightMode = LightMode::Area;
+    RenderJob job;
+    CHECK(!job.extend(4));                                       // nothing to extend yet
+    CHECK(job.start(p));
+    job.wait();
+    const Film* film = job.film();
+    CHECK(film->count[0] == 4 && job.runs() == 1);
+    CHECK(job.extend(12));
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Done && job.film() == film);   // same film, nothing restarted
+    CHECK(job.runs() == 1 && job.doneSpp() == 16 && job.targetSpp() == 16 && film->count[0] == 16);
+    RenderParams direct = p; direct.spp = 16; direct.progressive = false;
+    RenderJob ref;
+    CHECK(ref.start(direct));
+    ref.wait();
+    CHECK(sameFilm(*job.film(), *ref.film()));                   // 4 + 12 samples = 16 samples in one go
+    CHECK(!job.extend(0));
+}
+
+TEST(progressive_render_job_cannot_be_extended_after_a_cancel) {
+    RenderParams p = jobParams(256); p.progressive = true;
+    RenderJob job;
+    CHECK(job.start(p));
+    CHECK(!job.extend(4));                                       // busy
+    job.cancel();
+    job.wait();
+    CHECK(job.state() == RenderJob::State::Cancelled);
+    CHECK(!job.extend(4));                                       // pixels have uneven sample counts now
+    CHECK(job.doneSpp() < 256);
+}
+
 int main() {
     for (auto& c : tests()) {
         int before = g_failed;

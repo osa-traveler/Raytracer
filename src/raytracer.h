@@ -249,6 +249,13 @@ struct BvhNode {
 //   Area:  the rectangle itself is sampled at random (M1): soft shadows, 1/d^2 falloff, one-sided emission.
 enum class LightMode { Point, Area };
 
+// How a pixel's radiance is estimated.
+//   Classic: Whitted-style (direct light + mirror/glass recursion, ambient constant). No diffuse interreflection.
+//   Path:    Monte Carlo path tracing (M2): every surface is Lambertian, the path continues in a cosine-sampled
+//            direction. Light is found by hitting the emitter (Scene::nee = false), or, with next event estimation
+//            (Scene::nee = true), by sampling a point on the emitter at every vertex.
+enum class Integrator { Classic, Path };
+
 // Rectangular area light, defined in the glb by a node named after the Blender light plus custom properties
 // (exported as glTF "extras"): rt_light_type = "rect", rt_size_x, rt_size_y (metres), rt_radiance.
 // Blender's own light settings are not exported to glTF (AREA lights are unsupported), so these properties
@@ -285,7 +292,10 @@ struct Scene {
     // away from the viewer at a silhouette is clamped (see trace). true: the M0 behaviour, which decides by the
     // interpolated normal and flips it, sending rays into the inside of spheres at their outline.
     bool legacyNormals = false;
-    int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting)
+    int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting); number of bounces in Path mode
+    Integrator integrator = Integrator::Classic;
+    bool nee = true;            // Path mode: next event estimation (direct light sampled at every vertex)
+    float envScale = 0.0f;      // Path mode: multiplier of the sky gradient seen as environment light (0 = only the area light emits)
 
     void buildBvh() {
         size_t n = tris.size();
@@ -720,6 +730,90 @@ inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
     return color;
 }
 
+
+// ---------------------------------------------------------------- path tracing (M2)
+// Distance along `ray` to the area light's rectangle, or -1. Only the emitting (front) side counts; the back is invisible.
+// The light is not part of the triangle mesh, so the path tracer intersects it separately.
+inline float intersectAreaLight(const AreaLight& a, const Ray& ray) {
+    float denom = dot(a.normal, ray.d);
+    if (denom >= -1e-6f) return -1.0f;
+    float t = dot(a.normal, a.center - ray.o) / denom;
+    if (t <= EPS) return -1.0f;
+    Vec3 d = ray.o + ray.d * t - a.center;
+    float u = dot(d, a.edgeU) / dot(a.edgeU, a.edgeU), v = dot(d, a.edgeV) / dot(a.edgeV, a.edgeV);
+    return (std::fabs(u) <= 0.5f && std::fabs(v) <= 0.5f) ? t : -1.0f;
+}
+
+// Cosine-weighted direction on the hemisphere around n (pdf = cos(theta) / pi), by Malley's method: a uniform point
+// on the unit disk lifted onto the hemisphere.
+inline Vec3 sampleCosineHemisphere(const Vec3& n, float u1, float u2) {
+    float r = std::sqrt(u1), phi = 2.0f * 3.14159265f * u2;
+    float x = r * std::cos(phi), y = r * std::sin(phi), z = std::sqrt(std::max(0.0f, 1.0f - u1));
+    Vec3 a = std::fabs(n.x) > 0.9f ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+    Vec3 t = normalize(cross(a, n));
+    Vec3 b = cross(n, t);
+    return normalize(t * x + b * y + n * z);
+}
+
+// Direct light reaching surface point x (normal N, true side Ng, Lambert albedo `albedo`) from the area light, one sample:
+// a uniformly random point p on the rectangle (pdf = 1 / area) and a shadow ray to it. The estimate is
+//     albedo / pi * Le * cos(theta at x) * cos(theta at the light) / dist^2 / pdf.
+// Unlike Classic shading this ignores glass (everything casts a full shadow) and the one-sided emitter gives no light
+// to points behind it.
+inline Vec3 sampleDirectLight(const Scene& sc, const Vec3& x, const Vec3& N, const Vec3& Ng, const Vec3& albedo, Sampler& smp) {
+    const AreaLight& a = sc.area;
+    float u = smp.next1D(), v = smp.next1D();
+    Vec3 p = a.center + a.edgeU * (u - 0.5f) + a.edgeV * (v - 0.5f);
+    Vec3 d = p - x;
+    float dist2 = std::max(dot(d, d), 1e-6f), dist = std::sqrt(dist2);
+    Vec3 wi = d * (1.0f / dist);
+    float cosX = dot(N, wi), cosGeo = dot(Ng, wi), cosL = dot(a.normal, wi * -1.0f);
+    if (cosX <= 0 || cosGeo <= 0 || cosL <= 0) return Vec3(0, 0, 0);
+    Hit blocker;
+    if (sc.intersect(Ray{x + Ng * (EPS * 10), wi}, dist - EPS * 10, blocker)) return Vec3(0, 0, 0);
+    float w = a.radiance * a.area * cosX * cosL / dist2 * (1.0f / 3.14159265f);
+    return albedo * w;
+}
+
+// Radiance along `ray` by a random walk. At each hit: the albedo multiplies the throughput (Lambert BRDF albedo/pi,
+// times cos / pdf = cos/pi, gives exactly albedo), then a cosine-sampled direction continues the path. Emission is
+// added when the path reaches the light (or, scaled by envScale, escapes into the sky). Only `maxDepth` bounces are
+// followed, so the result is the light that has bounced 0..maxDepth times (a biased-low but consistent estimate;
+// no Russian roulette, so that depth limits can be compared). The Classic direct-lighting code is not used here.
+// With next event estimation the light is counted exactly once per path: at every vertex by sampleDirectLight(), and a
+// BSDF-sampled ray that happens to hit the emitter adds nothing (only the camera ray, bounce 0, sees it directly).
+// Both modes have the same expectation for every bounce limit: NEE at vertex b (0-based) stands for the paths that
+// reach the light with the (b+1)-th ray, which the plain version only follows when maxDepth >= b + 1.
+inline Vec3 pathTrace(const Scene& sc, Ray ray, Sampler& smp) {
+    Vec3 L(0, 0, 0), throughput(1, 1, 1);
+    const bool hasLight = sc.area.valid;
+    for (int bounce = 0;; bounce++) {
+        Hit h;
+        bool hit = sc.intersect(ray, INF, h);
+        if (hasLight) {
+            float tl = intersectAreaLight(sc.area, ray);
+            if (tl > 0 && (!hit || tl < h.t)) {                                                   // the emitter is opaque
+                if (!sc.nee || bounce == 0) L += throughput * sc.area.radiance;
+                return L;
+            }
+        }
+        if (!hit) { if (sc.envScale > 0) L += throughput * background(ray) * sc.envScale; return L; }
+        if (bounce >= sc.maxDepth) return L;
+
+        const Material& m = sc.materials[h.material];
+        bool front = dot(ray.d, h.ng) < 0;
+        Vec3 Ng = front ? h.ng : -h.ng;                // the side the ray came from
+        Vec3 N = front ? h.n : -h.n;
+        float c = dot(N, Ng);
+        if (c < 0.01f) N = normalize(N + Ng * (0.01f - c));
+        if (sc.nee && hasLight) L += throughput * sampleDirectLight(sc, h.p, N, Ng, m.base, smp);
+        throughput = throughput * m.base;               // metallic / transmission are ignored: everything is Lambertian
+        Vec3 d = sampleCosineHemisphere(N, smp.next1D(), smp.next1D());
+        if (dot(d, Ng) <= 0) return L;                  // smooth normal pushed the sample below the real surface
+        ray = Ray{h.p + Ng * (EPS * 10), d};
+    }
+}
+
 // ---------------------------------------------------------------- camera
 struct Camera {
     Vec3 pos, forward, right, up;
@@ -794,12 +888,22 @@ inline Camera makeCamera(const Scene& scene) {
 
 struct RenderSettings {
     unsigned threads = 1;
-    int spp = 1;            // samples per pixel
+    int spp = 1;            // number of samples per pixel taken by this call
+    int firstSample = 0;    // index of the first of them: a render can be split into passes [0,a), [a,b), ... and the film
+                            // then holds exactly what one call with spp = b would have produced (progressive rendering)
     bool jitter = false;    // false: every sample goes through the pixel centre; true: uniformly random point inside the pixel
     uint64_t seed = 1;      // global random seed
 };
 
-// Renders settings.spp samples per pixel into `film`, row by row, on settings.threads threads.
+// Progressive schedule: the total number of samples per pixel after each pass is 1, 4, 16, 64, ... (x4), the last pass
+// ending exactly at `target`. nextPassTotal(done, target) is the total after the next pass.
+inline int nextPassTotal(int done, int target) {
+    int t = 1;
+    while (t <= done) t *= 4;
+    return std::min(t, target);
+}
+
+// Renders samples [firstSample, firstSample + spp) of every pixel and ADDS them to `film`, row by row, on settings.threads threads.
 // rowDone (optional, HEIGHT entries) is set to 1 when a row is finished; quit (optional) aborts early.
 // Counters of all threads are added to `total`.
 // Every (pixel, sample) has its own Sampler stream and a pixel's samples are summed in a fixed order, so the
@@ -816,10 +920,11 @@ inline void renderFrame(const Scene& scene, const Camera& cam, Film& film, const
             for (int x = 0; x < film.w; x++) {
                 uint64_t pixel = (uint64_t)y * film.w + x;
                 for (int k = 0; k < rs.spp; k++) {
-                    Sampler smp(rs.seed, pixel, (uint32_t)k);
+                    Sampler smp(rs.seed, pixel, (uint32_t)(rs.firstSample + k));
                     float px = x + 0.5f, py = y + 0.5f;
                     if (rs.jitter) { px = x + smp.next1D(); py = y + smp.next1D(); }
-                    film.add(x, y, trace(scene, cam.ray(px, py), 0, smp));
+                    Ray ray = cam.ray(px, py);
+                    film.add(x, y, scene.integrator == Integrator::Path ? pathTrace(scene, ray, smp) : trace(scene, ray, 0, smp));
                 }
             }
             if (rowDone) rowDone[y].store(1);

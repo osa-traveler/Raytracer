@@ -6,6 +6,7 @@
 #include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -91,6 +92,14 @@ int runGui(const GuiOptions& opt) {
     std::vector<uint8_t> rowShown(HEIGHT, 0);
     int shownRun = 0;
     bool displayDirty = false;
+    std::vector<Vec3> snap;                                     // image of the latest finished pass (progressive mode)
+    int shownPass = 0;
+    int addSpp = 64;                                            // samples added by the "+ samples" button
+    bool autoReset = true;                                      // progressive: restart when a setting changes
+    bool pendingRestart = false;
+    bool fitMode = true;                                        // image view: fit to the area until the user zooms or pans
+    float zoom = 1.0f;
+    ImVec2 pan(0, 0);                                           // image top-left relative to the view area, in screen pixels
 
     auto startRender = [&]() {
         params.scene = scenePath;
@@ -98,6 +107,7 @@ int runGui(const GuiOptions& opt) {
         if (job.start(params)) {
             std::fill(fb.begin(), fb.end(), 0xFF101010u);
             std::fill(rowShown.begin(), rowShown.end(), 0);
+            snap.clear();
             shownRun = job.runs();
             saveMessage.clear();
         }
@@ -131,6 +141,22 @@ int runGui(const GuiOptions& opt) {
             std::fill(rowShown.begin(), rowShown.end(), 0);
             shownRun = job.runs();
         }
+        const bool progressiveRun = job.runs() > 0 && job.params().progressive;
+        if (progressiveRun) {
+            // Progressive: the worker publishes the whole image after each pass; show the latest one.
+            auto encodeSnap = [&]() {
+                for (size_t i = 0; i < snap.size(); i++) {
+                    const Vec3& c = snap[i];
+                    fb[i] = 0xFF000000u | (disp.encode(c.x) << 16) | (disp.encode(c.y) << 8) | disp.encode(c.z);
+                }
+            };
+            if (job.passes() != 0 && job.passes() != shownPass) {
+                std::vector<Vec3> tmp;
+                int pass = job.copySnapshot(tmp);
+                if (tmp.size() == (size_t)WIDTH * HEIGHT) { snap = std::move(tmp); shownPass = pass; encodeSnap(); displayDirty = false; }
+            }
+            if (displayDirty) { if (snap.size() == (size_t)WIDTH * HEIGHT) encodeSnap(); displayDirty = false; }
+        } else {
         if (displayDirty) { std::fill(rowShown.begin(), rowShown.end(), 0); displayDirty = false; }
         if (const Film* film = job.film()) {
             const std::atomic<uint8_t>* done = job.rowDone();
@@ -142,6 +168,7 @@ int runGui(const GuiOptions& opt) {
                 }
                 rowShown[y] = 1;
             }
+        }
         }
         SDL_UpdateTexture(tex, nullptr, fb.data(), WIDTH * 4);
 
@@ -155,10 +182,61 @@ int runGui(const GuiOptions& opt) {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(kImageWindowW, kWindowH));
         ImGui::Begin("Image", nullptr, fixed | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
-        ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(WIDTH, HEIGHT));
         {
-            int rows = job.rowsDone();
-            ImGui::ProgressBar(rows / (float)HEIGHT, ImVec2(WIDTH, 0), job.state() == RenderJob::State::Rendering ? "rendering" : stateName(job.state()));
+            // Zoomable view (like a browser): wheel / trackpad scroll zooms around the cursor, drag pans, double-click fits.
+            const ImVec2 viewSize(kImageWindowW - 16, kWindowH - 86);
+            const ImVec2 origin = ImGui::GetCursorScreenPos();
+            const float fitZoom = std::min(viewSize.x / WIDTH, viewSize.y / HEIGHT);
+            auto fitPan = [&](float z) { return ImVec2((viewSize.x - WIDTH * z) * 0.5f, (viewSize.y - HEIGHT * z) * 0.5f); };
+            if (fitMode) { zoom = fitZoom; pan = fitPan(zoom); }
+            ImGui::InvisibleButton("view", viewSize, ImGuiButtonFlags_MouseButtonLeft);
+            const bool hovered = ImGui::IsItemHovered();
+            const ImVec2 mouse(io.MousePos.x - origin.x, io.MousePos.y - origin.y);   // cursor in view coordinates
+            auto setZoom = [&](float z, ImVec2 anchor) {      // keep the image point under `anchor` fixed
+                z = std::max(0.1f, std::min(z, 64.0f));
+                pan = ImVec2(anchor.x - (anchor.x - pan.x) * z / zoom, anchor.y - (anchor.y - pan.y) * z / zoom);
+                zoom = z; fitMode = false;
+            };
+            if (hovered && io.MouseWheel != 0.0f) setZoom(zoom * std::pow(1.15f, io.MouseWheel), mouse);
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
+                pan = ImVec2(pan.x + io.MouseDelta.x, pan.y + io.MouseDelta.y); fitMode = false;
+            }
+            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) fitMode = true;
+
+            SDL_SetTextureScaleMode(tex, zoom >= 1.0f ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);   // sharp pixels when magnified
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->PushClipRect(origin, ImVec2(origin.x + viewSize.x, origin.y + viewSize.y), true);
+            dl->AddRectFilled(origin, ImVec2(origin.x + viewSize.x, origin.y + viewSize.y), IM_COL32(24, 24, 24, 255));
+            dl->AddImage((ImTextureID)(intptr_t)tex, ImVec2(origin.x + pan.x, origin.y + pan.y),
+                         ImVec2(origin.x + pan.x + WIDTH * zoom, origin.y + pan.y + HEIGHT * zoom));
+            dl->PopClipRect();
+
+            if (ImGui::Button("Fit")) fitMode = true;
+            ImGui::SameLine();
+            for (float z : {1.0f, 2.0f, 4.0f, 8.0f}) {         // fixed magnifications, centred on the view
+                char label[16]; std::snprintf(label, sizeof label, "%d%%", (int)(z * 100));
+                if (ImGui::Button(label)) setZoom(z, ImVec2(viewSize.x * 0.5f, viewSize.y * 0.5f));
+                ImGui::SameLine();
+            }
+            ImGui::Text("%.0f%%", zoom * 100.0f);
+            ImGui::SameLine();
+            int ix = (int)std::floor((mouse.x - pan.x) / zoom), iy = (int)std::floor((mouse.y - pan.y) / zoom);
+            const Film* film = job.film();
+            if (hovered && ix >= 0 && iy >= 0 && ix < WIDTH && iy < HEIGHT && film && job.rowDone() && job.rowDone()[iy].load()) {
+                Vec3 c = film->pixel(ix, iy);
+                ImGui::Text("(%d, %d)  linear %.3f %.3f %.3f  n=%d", ix, iy, c.x, c.y, c.z, film->count[(size_t)iy * WIDTH + ix]);
+            } else {
+                ImGui::TextDisabled("scroll = zoom, drag = pan, double-click = fit");
+            }
+            if (progressiveRun) {
+                char overlay[96];
+                std::snprintf(overlay, sizeof overlay, "%s  %d / %d spp", job.state() == RenderJob::State::Rendering ? "rendering" : stateName(job.state()),
+                              job.doneSpp(), job.targetSpp());
+                ImGui::ProgressBar(job.targetSpp() > 0 ? job.doneSpp() / (float)job.targetSpp() : 0.0f, ImVec2(viewSize.x, 0), overlay);
+            } else {
+                ImGui::ProgressBar(job.rowsDone() / (float)HEIGHT, ImVec2(viewSize.x, 0),
+                                   job.state() == RenderJob::State::Rendering ? "rendering" : stateName(job.state()));
+            }
         }
         ImGui::End();
 
@@ -174,14 +252,25 @@ int runGui(const GuiOptions& opt) {
                 if (ImGui::Selectable(s.c_str())) std::snprintf(scenePath, sizeof scenePath, "%s", s.c_str());
             ImGui::EndCombo();
         }
-        ImGui::InputInt("samples / pixel", &params.spp, 1, 16);
+        ImGui::InputInt(params.progressive ? "target samples / pixel" : "samples / pixel", &params.spp, 1, 16);
         params.spp = std::max(1, std::min(params.spp, 100000));
         ImGui::Checkbox("jitter (random point in pixel)", &params.jitter);
+        ImGui::Checkbox("progressive (1, 4, 16, ... spp)", &params.progressive);
+        ImGui::BeginDisabled(!params.progressive);
+        ImGui::Checkbox("restart when a setting changes", &autoReset);
+        ImGui::EndDisabled();
         ImGui::InputInt("seed", &seedInput);
         int threads = (int)params.threads;
         ImGui::SliderInt("threads", &threads, 1, (int)std::max(1u, std::thread::hardware_concurrency()));
         params.threads = (unsigned)threads;
+        int integratorIndex = params.integrator == Integrator::Path ? 1 : 0;
+        ImGui::Combo("integrator", &integratorIndex, "classic (Whitted)\0path tracing (M2)\0");
+        params.integrator = integratorIndex == 1 ? Integrator::Path : Integrator::Classic;
         ImGui::SliderInt("max bounces", &params.maxDepth, 0, 16);
+        ImGui::BeginDisabled(params.integrator != Integrator::Path);
+        ImGui::Checkbox("next event estimation (NEE)", &params.nee);
+        ImGui::SliderFloat("sky light (path)", &params.envScale, 0.0f, 2.0f, "%.2f");
+        ImGui::EndDisabled();
         int lightModeIndex = params.lightMode == LightMode::Area ? 1 : 0;
         ImGui::Combo("light", &lightModeIndex, "point (M0 baseline, hard shadow)\0area (soft shadow)\0");
         params.lightMode = lightModeIndex == 1 ? LightMode::Area : LightMode::Point;
@@ -199,6 +288,14 @@ int runGui(const GuiOptions& opt) {
         ImGui::BeginDisabled(!busy);
         if (ImGui::Button("Cancel", ImVec2(120, 0))) job.cancel();
         ImGui::EndDisabled();
+        // Continue a finished progressive render with more samples (nothing is reset).
+        ImGui::BeginDisabled(busy || !params.progressive || !job.params().progressive || job.state() != RenderJob::State::Done);
+        if (ImGui::Button("+ samples", ImVec2(120, 0))) job.extend(addSpp);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        ImGui::InputInt("##add", &addSpp, 0, 0);
+        addSpp = std::max(1, std::min(addSpp, 100000));
 
         ImGui::SeparatorText("Display (applies instantly, no re-render)");
         if (ImGui::SliderFloat("exposure", &disp.exposure, 0.05f, 16.0f, "%.2f", ImGuiSliderFlags_Logarithmic)) displayDirty = true;
@@ -207,6 +304,7 @@ int runGui(const GuiOptions& opt) {
 
         ImGui::SeparatorText("Status");
         ImGui::Text("state: %s", stateName(job.state()));
+        if (progressiveRun) ImGui::Text("progress: %d / %d spp, %d passes", job.doneSpp(), job.targetSpp(), job.passes());
         if (job.state() == RenderJob::State::Error) ImGui::TextWrapped("%s", job.error().c_str());
         if (std::shared_ptr<Scene> sc = job.scene())
             ImGui::Text("scene: %zu triangles, area light %s", sc->tris.size(), sc->area.valid ? "found" : "none");
@@ -229,6 +327,21 @@ int runGui(const GuiOptions& opt) {
         ImGui::EndDisabled();
         if (!saveMessage.empty()) ImGui::TextWrapped("%s", saveMessage.c_str());
         ImGui::End();
+
+        // Progressive mode: a changed setting invalidates the accumulated image, so cancel and start over (the scene path
+        // and the sample target are not triggers: they apply on Render / "+ samples").
+        if (params.progressive && autoReset && job.runs() > 0) {
+            const RenderParams cur = job.params();
+            const bool changed = params.jitter != cur.jitter || (uint64_t)std::max(0, seedInput) != cur.seed || params.threads != cur.threads ||
+                                 params.maxDepth != cur.maxDepth || params.lightMode != cur.lightMode || params.lightSize != cur.lightSize ||
+                                 params.legacyNormals != cur.legacyNormals || params.integrator != cur.integrator || params.nee != cur.nee ||
+                                 params.envScale != cur.envScale || params.progressive != cur.progressive;
+            if (changed) pendingRestart = true;
+        }
+        if (pendingRestart) {
+            if (job.busy()) job.cancel();
+            else { startRender(); pendingRestart = false; }
+        }
 
         ImGui::Render();
         SDL_SetRenderDrawColor(ren, 20, 20, 20, 255);

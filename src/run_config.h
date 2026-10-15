@@ -34,8 +34,11 @@ inline void writeRunConfig(const std::string& path, const RenderParams& p, const
     std::fprintf(f, "  \"note\": \"%s\",\n", jsonEscape(note).c_str());
     std::fprintf(f, "  \"resolution\": [%d, %d],\n", WIDTH, HEIGHT);
     std::fprintf(f, "  \"samples_per_pixel\": %d,\n", p.spp);
+    std::fprintf(f, "  \"progressive\": %s,\n", p.progressive ? "true" : "false");
     std::fprintf(f, "  \"pixel_sampling\": \"%s\",\n", p.jitter ? "uniform random point inside the pixel (jitter)" : "pixel centre");
     std::fprintf(f, "  \"rng\": {\"generator\": \"PCG32, one stream per (pixel, sample)\", \"seed\": %llu},\n", (unsigned long long)p.seed);
+    std::fprintf(f, "  \"integrator\": \"%s\",\n", scene.integrator == Integrator::Path ? (scene.nee ? "path (Lambert, cosine sampling, NEE)" : "path (Lambert, cosine sampling, no NEE)") : "classic (Whitted)");
+    std::fprintf(f, "  \"environment_scale\": %g,\n", scene.envScale);
     std::fprintf(f, "  \"max_depth\": %d,\n", scene.maxDepth);
     std::fprintf(f, "  \"silhouette_normals\": \"%s\",\n", scene.legacyNormals ? "legacy (M0: flip the interpolated normal)" : "geometric facing + clamp");
     std::fprintf(f, "  \"threads\": %u,\n", p.threads);
