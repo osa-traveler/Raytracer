@@ -4,6 +4,10 @@
 
 ## 2026-10-16
 
+### 反射レイとシャドウレイの図
+- 解説ドキュメント(RENDERING_GUIDE.md)を更新: 第7章に、2種類のレイの役割、光源に向かわない反射レイの扱い(直接光の候補 / 間接光の運び役)、NEE で残るノイズの原因を追加。第10章の MIS に、重みの意味(数値の例、二重計上にならない理由、絵の正解は変わらない)と図を追加。用語集に、反射レイ・シャドウレイ・ホタルを追加。
+- 拡散面の1点で、反射レイ(青)とシャドウレイ(橙の点線)がすることを、NEE なし / NEE あり / NEE + MIS の3つで比べた図(部屋の横からの断面)。`docs/screenshots/2026-10-16_ray-types-shadow-reflection.png`(`tools/plot_ray_types.py`)。[RENDERING_GUIDE.md](RENDERING_GUIDE.md) の第7章に貼った。
+
 ### M4(Russian Roulette、PDF と MIS)
 - **実装**: `bsdfPdfLambert()` / `lightPdfSolidAngle()`(立体角あたりの密度)、`powerHeuristic()`、MIS(`--mis` / `--no-mis`、**既定オン**)、Russian Roulette(`--rr`、既定オフ、3回反射から)、シャドウレイ数の記録(JSON の `shadow_rays`)、GUI のチェックボックス。Classic のコードは変えていない。
 - **テスト**(354項目、すべて成功): 両方の密度が、方向全体で積分すると 1 になる、BSDF のみ / NEE / MIS の期待値の一致(光源 0.5 m と 1.5 m、反射回数 1・2・3)、MIS が大きい光源で NEE 以下・BSDF のみより低ノイズ、ルーレットで期待値が変わらずレイ数が減る、シャドウレイの記録。**わざとバグを入れて検出を確認**: MIS の重みの入れ替え → 期待値の一致のテストが失敗。1/p の補正の削除 → ルーレットのテストが失敗(どちらも元に戻した)。
