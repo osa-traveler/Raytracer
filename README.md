@@ -1,7 +1,7 @@
 # Raytracer
 
-教科書の最初に出てくるような Whitted 式レイトレーサから出発して、モンテカルロ法(面光源のサンプリング)まで拡張した、学習用のレイトレーサです。
-古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0・M1 完了、次は M2: パストレーシング)。
+教科書の最初に出てくるような Whitted 式レイトレーサから出発して、モンテカルロ法(面光源のサンプリング)、**パストレーシング(NEE、段階描画)**まで拡張した、学習用のレイトレーサです。
+古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0〜M3 完了(NEE も実装済み)、次は M4 の残り(MIS など))。
 Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x480 で描画して、操作パネル付きのウィンドウに表示します。
 
 ![最新の描画(面光源 64 spp)](docs/screenshots/2026-10-15_room-3spheres-area-light-64spp.png)
@@ -15,10 +15,13 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
   - 拡散反射 + Blinn-Phong、**面光源(矩形をランダムにサンプリング、ソフトシャドウ)**または点光源、影(ガラスは薄い影)
   - 金属・低 roughness 材質の鏡面反射(フレネル)
   - ガラスの屈折(IOR 1.5、フレネル、全反射)
+- **パストレーシング**(`--integrator path`): Lambert、コサイン重み付きサンプリング、反射回数の指定、NEE(光源への直接サンプリング、`--no-nee` で切り替え)。拡散面どうしの間接光(カラーブリーディング)が描ける。Cornell Box で NEE により、同じ spp の誤差が約 1/4
+- **段階描画**(ウィンドウの既定): 1→4→16→64→… spp と更新し、後から「+ samples」で追加できる。パスの分け方によらず、同じ画像
+- **画像のズーム・パン**(スクロール / ドラッグ / ダブルクリックで全体表示)、カーソル下のピクセル値の表示
 - モンテカルロ法: 再現性のある乱数(PCG32、ピクセルごとに独立。スレッド数によらず結果が同一)、1ピクセルのサンプル数(`--spp`)、ピクセル内のランダムな位置(ジッタ = アンチエイリアス)
 - 線形の浮動小数の film と、表示変換(露出・ガンマ)の分離。画像は PNG・PFM(線形)で保存、画像どうしの差(RMSE)を測れる
 - マルチスレッドで走査線ごとに描画し、描画の進行をウィンドウに表示
-- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(212項目)、再現できる実験(`experiments/`)
+- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(288項目)、再現できる実験(`experiments/`)
 
 ## ビルドと実行
 
@@ -26,12 +29,14 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 初回の `cmake` の設定時に、操作パネル用の Dear ImGui(MIT)を GitHub から取得します(固定バージョン + ハッシュ検証。[docs/THIRD_PARTY.md](docs/THIRD_PARTY.md))。
 
 ```sh
-cmake -S . -B build
-cmake --build build
-./build/raytrace                    # 既定: Scene/Test/Untitled.glb
-./build/raytrace Assets/VW_Beetle_1967.glb   # 別の GLB を指定(例: ビートル単体)
-./build/raytrace path/to/scene.glb  # 別のシーン
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release   # 描画・時間の計測用(最適化あり。Debug の約11倍速い)
+cmake --build build-release
+./build-release/raytrace                    # 既定: Scene/Test/Untitled.glb
+./build-release/raytrace Assets/VW_Beetle_1967.glb   # 別の GLB を指定(例: ビートル単体)
+./build-release/raytrace path/to/scene.glb  # 別のシーン
 ```
+
+デバッグ用には、`cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug` の `build/` を使います(最適化なしで遅いので、描画や時間の計測には使わないでください)。
 
 リポジトリのルートで実行してください。ウィンドウの左に画像、右に操作パネルが出ます。
 
@@ -61,6 +66,7 @@ cmake --build build
 
 ## シーン・アセット
 
+- `Scene/Test/Cornell.glb`: Cornell Box(`tools/make_cornell.py` で生成。赤壁・緑壁・白い箱2個・天井の面光源)。パストレーシング(`--integrator path`)の検証用
 - `Scene/Test/Room_2Spheres.glb`: 基準シーン(部屋、金属球、ガラス球。球は部屋の中心に対称)
 - `Scene/Test/Untitled.glb`: Blender で作成した検証用シーン(部屋、金属球、青い拡散球、ガラス球)
 - `Assets/VW_Beetle_1967.glb`: Blender で手作りした1967年式フォルクスワーゲン・ビートル風のモデル(約31万三角形。簡易的な形状で、正確な再現ではありません)。
@@ -68,8 +74,8 @@ cmake --build build
 
 ## 今後の予定
 
-[ロードマップ](docs/RENDERER_ROADMAP.md)のとおり。次は M2(拡散面どうしの間接光 = カラーブリーディングを描く、最小のモンテカルロ・パストレーシング)。
-そのあと、プログレッシブ描画、NEE・MIS、フォトンマッピング、PBR、HDRI などへ進む予定です。
+[ロードマップ](docs/RENDERER_ROADMAP.md)のとおり。次は M4 の残り(MIS・Importance Sampling・Russian Roulette)。
+そのあと、NEE・MIS、フォトンマッピング、PBR、HDRI などへ進む予定です。
 
 ## ドキュメント
 

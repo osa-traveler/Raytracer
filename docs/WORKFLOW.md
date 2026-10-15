@@ -60,7 +60,8 @@
 - **プッシュは、依頼があったときだけ行う**。
 - 公開前に、含めるファイルを確認する。個人情報(メールアドレス、ローカルパス、認証情報)や、他人の権利を侵害しうるファイルを入れない。
 - コミットの作者メールには、GitHub の noreply アドレスを使う(このリポジトリのローカル設定済み)。
-- `.gitignore` の方針: `build/`、出力画像、`.blend` / `.blend1`、`.mcp.json`、エディタ・OS の一時ファイルは含めない。モデルやシーンは GLB で共有する。
+- **ビルド**: 描画・時間の計測・テストは Release の `build-release/` で行う(`cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release`)。`build/` はデバッグ用の Debug ビルドなので、計測には使わない。実験の JSON には、ビルドの種類が記録される。
+- `.gitignore` の方針: `build/`、`build-release/`、出力画像、`.blend` / `.blend1`、`.mcp.json`、エディタ・OS の一時ファイルは含めない。モデルやシーンは GLB で共有する。
 - 外部のモデル・テクスチャ・HDRI を使うときは、ライセンスを確認し、出典を記録する。
 
 ## WORKLOG の書き方
