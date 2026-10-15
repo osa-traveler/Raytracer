@@ -1,0 +1,13 @@
+legacy (M0) vs fixed silhouette handling: pixels that differ (exact comparison of the linear film)
+
+Room_2Spheres, 1 spp, pixel centre, point light
+  changed pixels: 21 of 307200 (0.007%), changed by more than 0.1: 9, largest change: 0.467, RMSE: 0.001429
+  exactly black pixels: legacy 14 -> fixed 0
+
+Untitled, 1 spp, pixel centre, point light
+  changed pixels: 21 of 307200 (0.007%), changed by more than 0.1: 9, largest change: 0.801, RMSE: 0.002241
+  exactly black pixels: legacy 6 -> fixed 0
+
+Untitled, 64 spp, jitter, area light (the latest screenshot)
+  changed pixels: 459 of 307200 (0.149%), changed by more than 0.1: 0, largest change: 0.086, RMSE: 0.000220
+  exactly black pixels: legacy 0 -> fixed 0

@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr int kImageWindowW = 660, kPanelW = 390, kWindowH = 520;
+constexpr int kImageWindowW = 660, kPanelW = 390, kWindowH = 600;
 
 const char* stateName(RenderJob::State s) {
     switch (s) {
@@ -188,6 +188,7 @@ int runGui(const GuiOptions& opt) {
         ImGui::BeginDisabled(params.lightMode != LightMode::Area);
         ImGui::SliderFloat("light size (m)", &params.lightSize, 0.0f, 8.0f, params.lightSize <= 0 ? "as in file" : "%.2f");
         ImGui::EndDisabled();
+        ImGui::Checkbox("legacy silhouette normals (M0)", &params.legacyNormals);
 
         ImGui::BeginDisabled(busy);
         if (ImGui::Button("Render", ImVec2(120, 0))) startRender();

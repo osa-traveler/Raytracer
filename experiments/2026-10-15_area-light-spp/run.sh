@@ -8,10 +8,10 @@ SCENE=Scene/Test/Room_2Spheres.glb
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build build >/dev/null
 
-./build/raytrace $SCENE --headless --light area --spp 1024 --seed 777 --out $OUT/reference --note "area light, reference 1024 spp" >/dev/null
-./build/raytrace $SCENE --headless --light point --out $OUT/point --note "M0 point light, hard shadow" >/dev/null
+./build/raytrace $SCENE --headless --light area --legacy-normals --spp 1024 --seed 777 --out $OUT/reference --note "area light, reference 1024 spp" >/dev/null
+./build/raytrace $SCENE --headless --light point --legacy-normals --out $OUT/point --note "M0 point light, hard shadow" >/dev/null
 for n in 1 4 16 64 256; do
-  ./build/raytrace $SCENE --headless --light area --spp $n --seed 1 --out $OUT/area_${n}spp --note "area light, $n spp" >/dev/null
+  ./build/raytrace $SCENE --headless --light area --legacy-normals --spp $n --seed 1 --out $OUT/area_${n}spp --note "area light, $n spp" >/dev/null
 done
 
 echo "RMSE against the area-light 1024 spp reference (linear values, whole image)" | tee $OUT/rmse.txt

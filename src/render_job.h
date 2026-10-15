@@ -20,6 +20,7 @@ struct RenderParams {
     int maxDepth = MAX_DEPTH;
     LightMode lightMode = LightMode::Area;   // Point = the M0 baseline light
     float lightSize = 0;                      // area light edge length in metres; 0 = as in the glb
+    bool legacyNormals = false;               // true = M0 behaviour at silhouettes (see Scene::legacyNormals)
 };
 
 class RenderJob {
@@ -87,6 +88,7 @@ private:
         }
         scene_->maxDepth = params_.maxDepth;
         configureLight(*scene_, params_.lightMode, params_.lightSize);
+        scene_->legacyNormals = params_.legacyNormals;
         RenderSettings rs;
         rs.threads = params_.threads; rs.spp = params_.spp; rs.jitter = params_.jitter; rs.seed = params_.seed;
         state_ = State::Rendering;

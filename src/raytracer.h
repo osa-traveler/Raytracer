@@ -201,7 +201,8 @@ struct Ray { Vec3 o, d; };
 
 struct Hit {
     float t = INF;
-    Vec3 p, n;
+    Vec3 p, n;          // n: interpolated (smooth) shading normal
+    Vec3 ng;            // geometric normal of the triangle, on the same side as the vertex normals
     int material = -1;
 };
 
@@ -280,6 +281,10 @@ struct Scene {
     AreaLight area;       // active area light (the file's one, possibly resized by configureLight)
     AreaLight areaFile;   // the area light exactly as the glb defines it
     LightMode lightMode = LightMode::Point;
+    // false (default): front/back is decided by the triangle's geometric normal and a shading normal that faces
+    // away from the viewer at a silhouette is clamped (see trace). true: the M0 behaviour, which decides by the
+    // interpolated normal and flips it, sending rays into the inside of spheres at their outline.
+    bool legacyNormals = false;
     int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting)
 
     void buildBvh() {
@@ -366,6 +371,8 @@ struct Scene {
             hit.t = best;
             hit.p = r.o + r.d * best;
             hit.n = normalize(bt->n0 * (1 - bu - bv) + bt->n1 * bu + bt->n2 * bv);
+            Vec3 g = normalize(cross(bt->p1 - bt->p0, bt->p2 - bt->p0));
+            hit.ng = dot(g, bt->n0 + bt->n1 + bt->n2) < 0 ? -g : g;   // follow the vertex normals, not the winding order
             hit.material = bt->material;
         }
         return found;
@@ -639,9 +646,22 @@ inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
     if (!sc.intersect(ray, INF, h)) return background(ray);
     const Material& m = sc.materials[h.material];
 
-    bool front = dot(ray.d, h.n) < 0;
-    Vec3 N = front ? h.n : -h.n;
     Vec3 V = -ray.d;
+    bool front;
+    Vec3 N;
+    if (sc.legacyNormals) {
+        front = dot(ray.d, h.n) < 0;
+        N = front ? h.n : -h.n;
+    } else {
+        // Which side was hit is a property of the triangle, not of the smoothed normal: near a sphere's outline the
+        // interpolated normal can point away from the viewer although the triangle faces it. Flipping it there (as the
+        // legacy code did) sent reflection / refraction rays into the sphere, where they bounced until the depth limit.
+        front = dot(ray.d, h.ng) < 0;
+        N = front ? h.n : -h.n;
+        float c = dot(N, V);
+        const float minCos = 0.01f;
+        if (c < minCos) N = normalize(N + V * (minCos - c));   // keep the shading normal (just) facing the viewer
+    }
     float cosI = std::max(0.0f, dot(N, V));
     Vec3 color(0, 0, 0);
     LightSample ls = sampleLight(sc, h.p, smp);   // one random point on the light (Area mode) or the point light

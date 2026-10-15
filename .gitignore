@@ -30,3 +30,7 @@ experiments/2026-10-15_area-light-spp/*.png
 # light-size experiment: keep the comparison image and the numbers, not every full-size PNG
 experiments/2026-10-15_light-size-spp/*.png
 !experiments/2026-10-15_light-size-spp/size_x_spp.png
+
+# silhouette-fix experiment: keep the comparison image and the numbers, not every full-size PNG
+experiments/2026-10-15_silhouette-fix/*.png
+!experiments/2026-10-15_silhouette-fix/before_after.png

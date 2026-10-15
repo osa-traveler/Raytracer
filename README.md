@@ -44,6 +44,7 @@ cmake --build build
 # サンプル数・ジッタ(アンチエイリアス)・乱数のシード、画像の差(RMSE)
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --jitter --spp 16 --seed 1 --out out
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --light area --light-size 0.5 --spp 64 --out out   # 小さい面光源(影がくっきり)
+./build/raytrace Scene/Test/Room_2Spheres.glb --headless --light point --legacy-normals --out out   # M0 の基準を再現(輪郭の扱いを旧方式に)
 ./build/raytrace --rmse out.pfm other.pfm
 ./build/raytrace_tests              # テスト
 ./build/raytrace --gui-selftest /tmp/gui   # 操作パネルの自動操作テスト(画面なしなら SDL_VIDEODRIVER=dummy を付ける)

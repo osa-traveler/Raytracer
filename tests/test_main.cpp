@@ -615,6 +615,101 @@ TEST(render_job_area_mode_matches_a_direct_area_render) {
     CHECK(sameFilm(*job.film(), direct));
 }
 
+// ---------------------------------------------------------------- silhouettes of smooth-shaded spheres
+// A UV sphere made of flat triangles with smooth (outward) vertex normals, like the spheres in the glb files.
+static void addSphere(Scene& sc, Vec3 c, float r, int material, int nu = 48, int nv = 24) {
+    auto pt = [&](int iu, int iv) {
+        float th = 3.14159265f * iv / nv, ph = 2 * 3.14159265f * iu / nu;
+        return Vec3(std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph));
+    };
+    for (int iv = 0; iv < nv; iv++)
+        for (int iu = 0; iu < nu; iu++) {
+            Vec3 a = pt(iu, iv), b = pt(iu + 1, iv), cc = pt(iu, iv + 1), d = pt(iu + 1, iv + 1);
+            auto tri = [&](Vec3 u, Vec3 v, Vec3 w) {
+                Triangle t;
+                t.p0 = c + u * r; t.p1 = c + v * r; t.p2 = c + w * r;
+                t.n0 = u; t.n1 = v; t.n2 = w;
+                t.material = material;
+                if (length(cross(t.p1 - t.p0, t.p2 - t.p0)) > 1e-9f) sc.tris.push_back(t);   // skip degenerate pole triangles
+            };
+            tri(a, b, cc); tri(cc, b, d);
+        }
+}
+
+static Scene sphereScene(bool glass, bool legacy) {
+    Scene sc;
+    Material m;
+    if (glass) { m.base = Vec3(1, 1, 1); m.metallic = 0; m.roughness = 0; m.transmission = 1; }
+    else { m.base = Vec3(0.8f, 0.02f, 0.02f); m.metallic = 1; m.roughness = 0.05f; }
+    sc.materials = {m};
+    addSphere(sc, Vec3(0, 0, 0), 1.0f, 0);
+    sc.buildBvh();
+    sc.ambient = Vec3(0, 0, 0);
+    sc.legacyNormals = legacy;
+    return sc;
+}
+
+// Parallel rays in a generic direction (not aligned with the mesh's axes) that pass at distance b from the sphere's
+// centre (b -> 1 is the outline).
+static int countDark(const Scene& sc, float bMin, float bMax, int n, bool exactlyBlack) {
+    const Vec3 d = normalize(Vec3(0.3f, 0.45f, -0.84f));
+    const Vec3 u = normalize(cross(d, Vec3(0, 1, 0))), v = cross(u, d);
+    int dark = 0;
+    for (int i = 0; i < n; i++) {
+        Sampler smp(11, (uint64_t)i, 0);
+        float b = bMin + (bMax - bMin) * smp.next1D(), phi = 2 * 3.14159265f * smp.next1D();
+        Vec3 o = d * -5.0f + u * (b * std::cos(phi)) + v * (b * std::sin(phi));
+        Vec3 c = trace(sc, Ray{o, d}, 0, smp);
+        dark += exactlyBlack ? (c.x == 0 && c.y == 0 && c.z == 0) : (c.x + c.y + c.z < 1e-3f);
+    }
+    return dark;
+}
+
+TEST(mirror_sphere_outline_does_not_turn_black) {
+    // Legacy: near the outline the interpolated normal can face away from the viewer, the renderer flips it and the
+    // reflection ray runs inside the sphere until the depth limit (colour 0). Fixed: no such rays.
+    CHECK(countDark(sphereScene(false, true), 0.99f, 0.99999f, 40000, true) > 0);      // the bug is reproducible in legacy mode
+    CHECK(countDark(sphereScene(false, false), 0.99f, 0.99999f, 40000, true) == 0);
+}
+
+TEST(glass_sphere_outline_does_not_turn_black) {
+    CHECK(countDark(sphereScene(true, true), 0.99f, 0.99999f, 40000, false) > 0);
+    CHECK(countDark(sphereScene(true, false), 0.99f, 0.99999f, 40000, false) == 0);
+}
+
+TEST(silhouette_fix_leaves_rays_away_from_the_outline_unchanged) {
+    const Vec3 d = normalize(Vec3(0.3f, 0.45f, -0.84f));
+    const Vec3 u = normalize(cross(d, Vec3(0, 1, 0))), v = cross(u, d);
+    for (bool glass : {false, true}) {
+        Scene legacy = sphereScene(glass, true), fixed = sphereScene(glass, false);
+        int same = 0, n = 5000;
+        for (int i = 0; i < n; i++) {
+            Sampler s1(21, (uint64_t)i, 0), s2(21, (uint64_t)i, 0);
+            float b = 0.7f * s1.next1D(), phi = 2 * 3.14159265f * s1.next1D();
+            s2.next1D(); s2.next1D();
+            Ray r{d * -5.0f + u * (b * std::cos(phi)) + v * (b * std::sin(phi)), d};
+            Vec3 x = trace(legacy, r, 0, s1), y = trace(fixed, r, 0, s2);
+            same += (x.x == y.x && x.y == y.y && x.z == y.z);
+        }
+        CHECK(same == n);       // bit for bit, inside 70% of the sphere's radius
+    }
+}
+
+TEST(geometric_normal_follows_the_vertex_normals_not_the_winding) {
+    for (int flipped = 0; flipped < 2; flipped++) {
+        Scene sc;
+        sc.materials = {diffuseMat({1, 1, 1})};
+        Triangle t = flipped ? makeTri({-5, 0, -5}, {5, 0, -5}, {0, 0, 5}) : makeTri({-5, 0, -5}, {0, 0, 5}, {5, 0, -5});
+        t.n0 = t.n1 = t.n2 = Vec3(0, 1, 0);                        // vertex normals say "up" whatever the winding is
+        sc.tris.push_back(t);
+        sc.buildBvh();
+        Hit h;
+        CHECK(sc.intersect(Ray{{0, 3, 0}, {0, -1, 0}}, INF, h));
+        CHECK_NEAR(length(h.ng), 1.0, 1e-5);
+        CHECK(dot(h.ng, h.n) > 0.99f);                             // same side as the shading normal
+    }
+}
+
 int main() {
     for (auto& c : tests()) {
         int before = g_failed;

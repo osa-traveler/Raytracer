@@ -6,6 +6,7 @@
   "pixel_sampling": "pixel centre",
   "rng": {"generator": "PCG32, one stream per (pixel, sample)", "seed": 1},
   "max_depth": 6,
+  "silhouette_normals": "legacy (M0: flip the interpolated normal)",
   "threads": 8,
   "display": {"exposure": 1, "gamma": 2.2, "tone_mapping": "none (clamp)"},
   "light_mode": "point (hard shadows, no falloff)",
@@ -18,6 +19,6 @@
   "bvh_nodes": 8191,
   "build": "release (NDEBUG)",
   "compiler": "Apple LLVM 21.0.0 (clang-2100.3.34.2)",
-  "timing_ms": {"load_and_bvh": 3.59, "render_runs": [97.01, 161.61, 132.26, 99.74, 100.22], "render_min": 97.01, "render_median": 100.22},
+  "timing_ms": {"load_and_bvh": 3.60, "render_runs": [97.21, 98.10, 97.63, 99.02, 98.98], "render_min": 97.21, "render_median": 98.10},
   "counters_per_frame": {"rays": 849315, "bvh_node_visits": 86731495, "triangle_tests": 15721293}
 }

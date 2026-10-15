@@ -9,11 +9,11 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build build >/dev/null
 
 # reference: 1024 jittered samples per pixel (not kept in Git, regenerated here)
-./build/raytrace $SCENE --headless --light point --jitter --spp 1024 --seed 777 --out $OUT/reference --note "reference, 1024 spp jitter" >/dev/null
+./build/raytrace $SCENE --headless --light point --legacy-normals --jitter --spp 1024 --seed 777 --out $OUT/reference --note "reference, 1024 spp jitter" >/dev/null
 # the M0 baseline: one sample at the pixel centre
-./build/raytrace $SCENE --headless --light point --out $OUT/centre_1spp --note "pixel centre, 1 spp" >/dev/null
+./build/raytrace $SCENE --headless --light point --legacy-normals --out $OUT/centre_1spp --note "pixel centre, 1 spp" >/dev/null
 for n in 1 4 16 64 256; do
-  ./build/raytrace $SCENE --headless --light point --jitter --spp $n --seed 1 --out $OUT/jitter_${n}spp --note "jitter, $n spp" >/dev/null
+  ./build/raytrace $SCENE --headless --light point --legacy-normals --jitter --spp $n --seed 1 --out $OUT/jitter_${n}spp --note "jitter, $n spp" >/dev/null
 done
 
 echo "RMSE against the 1024 spp reference (linear values, whole image)"  | tee $OUT/rmse.txt
