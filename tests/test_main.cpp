@@ -849,7 +849,7 @@ TEST(nee_matches_a_quadrature_of_the_floor_radiance) {
 TEST(nee_and_plain_path_tracing_have_the_same_expectation_at_every_bounce_limit) {
     Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
     configureLight(sc, LightMode::Area, 0);
-    sc.integrator = Integrator::Path;
+    sc.integrator = Integrator::Path; sc.mis = false; sc.mis = false;
     Camera cam = makeCamera(sc);
     for (Ray r : {cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f),        // floor
                   cam.ray(WIDTH * 0.2f, HEIGHT * 0.5f),        // red wall
@@ -867,7 +867,7 @@ TEST(nee_and_plain_path_tracing_have_the_same_expectation_at_every_bounce_limit)
 TEST(nee_has_much_less_noise_than_plain_path_tracing) {
     Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
     configureLight(sc, LightMode::Area, 0);
-    sc.integrator = Integrator::Path; sc.maxDepth = 1;
+    sc.integrator = Integrator::Path; sc.mis = false; sc.maxDepth = 1;
     Camera cam = makeCamera(sc);
     Ray r = cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f);
     double mp, sp, mn, sn;
@@ -965,6 +965,95 @@ TEST(progressive_render_job_cannot_be_extended_after_a_cancel) {
     CHECK(job.state() == RenderJob::State::Cancelled);
     CHECK(!job.extend(4));                                       // pixels have uneven sample counts now
     CHECK(job.doneSpp() < 256);
+}
+
+// ---------------------------------------------------------------- M4: PDFs, MIS, Russian roulette
+// Uniformly random unit vectors (a check of the densities needs an independent way to cover all directions).
+static Vec3 uniformSphere(Sampler& smp) {
+    float z = 1 - 2 * smp.next1D(), r = std::sqrt(std::max(0.0f, 1 - z * z)), phi = 2 * 3.14159265f * smp.next1D();
+    return Vec3(r * std::cos(phi), z, r * std::sin(phi));      // y is "up"
+}
+
+TEST(pdfs_integrate_to_one_over_the_directions_they_can_produce) {
+    Sampler smp(5, 0, 0);
+    const int n = 600000;
+    AreaLight a; a.valid = true; a.center = Vec3(0.5f, 3, -0.2f); a.edgeU = Vec3(2, 0, 0); a.edgeV = Vec3(0, 0, 1.5f);
+    a.normal = Vec3(0, -1, 0); a.area = 3.0f;
+    const Vec3 x(0.1f, 0, 0.3f);
+    double light = 0, cosine = 0;
+    for (int i = 0; i < n; i++) {
+        Vec3 d = uniformSphere(smp);                                  // pdf of uniform sphere sampling = 1 / (4 pi)
+        float t = intersectAreaLight(a, Ray{x, d});
+        if (t > 0) light += lightPdfSolidAngle(a, t * t, dot(a.normal, d * -1.0f));
+        cosine += bsdfPdfLambert(d.y);
+    }
+    CHECK_NEAR(light / n * 4 * 3.14159265, 1.0, 0.02);                // the light's density integrates to 1 over the sphere
+    CHECK_NEAR(cosine / n * 4 * 3.14159265, 1.0, 0.01);               // so does the cosine density over the hemisphere
+    CHECK(powerHeuristic(0.3f, 0.7f) + powerHeuristic(0.7f, 0.3f) > 0.9999f && powerHeuristic(0.3f, 0.7f) + powerHeuristic(0.7f, 0.3f) < 1.0001f);
+    CHECK(powerHeuristic(1.0f, 0.0f) == 1.0f && powerHeuristic(0.0f, 1.0f) == 0.0f);
+}
+
+static Scene cornellPath(float lightSize) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, lightSize);
+    sc.integrator = Integrator::Path;
+    return sc;
+}
+
+TEST(plain_nee_and_mis_have_the_same_expectation_for_small_and_large_lights) {
+    for (float size : {0.0f, 1.5f}) {                                 // 0 = the file's 0.5 m light
+        Scene sc = cornellPath(size);
+        Camera cam = makeCamera(sc);
+        for (Ray r : {cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f), cam.ray(WIDTH * 0.2f, HEIGHT * 0.5f), cam.ray(WIDTH * 0.7f, HEIGHT * 0.15f)}) {
+            for (int depth : {1, 2, 3}) {
+                sc.maxDepth = depth;
+                double m[3], se[3];
+                sc.nee = false; sc.mis = false; meanAndSe(sc, r, 40000, m[0], se[0]);
+                sc.nee = true;  sc.mis = false; meanAndSe(sc, r, 40000, m[1], se[1]);
+                sc.nee = true;  sc.mis = true;  meanAndSe(sc, r, 40000, m[2], se[2]);
+                for (int a = 0; a < 3; a++) for (int b = a + 1; b < 3; b++)
+                    CHECK(std::fabs(m[a] - m[b]) < 5 * std::sqrt(se[a] * se[a] + se[b] * se[b]) + 1e-4);
+            }
+        }
+    }
+}
+
+TEST(mis_is_no_noisier_than_light_sampling_and_beats_bsdf_sampling_with_a_large_light) {
+    Scene sc = cornellPath(1.8f);                                     // a large light: BSDF sampling finds it often
+    Camera cam = makeCamera(sc);
+    sc.maxDepth = 1;
+    Ray r = cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f);
+    double m, sBsdf, sNee, sMis;
+    sc.nee = false; sc.mis = false; meanAndSe(sc, r, 60000, m, sBsdf);
+    sc.nee = true;  sc.mis = false; meanAndSe(sc, r, 60000, m, sNee);
+    sc.nee = true;  sc.mis = true;  meanAndSe(sc, r, 60000, m, sMis);
+    CHECK(sMis < sNee * 1.05);
+    CHECK(sMis < sBsdf);
+}
+
+TEST(russian_roulette_keeps_the_expectation_and_shortens_the_paths) {
+    Scene sc = cornellPath(0.0f);
+    Camera cam = makeCamera(sc);
+    sc.maxDepth = 6;
+    for (Ray r : {cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f), cam.ray(WIDTH * 0.2f, HEIGHT * 0.5f)}) {
+        double m0, s0, m1, s1;
+        sc.russianRoulette = false; tlStats = Stats{}; meanAndSe(sc, r, 80000, m0, s0); uint64_t rays0 = tlStats.rays;
+        sc.russianRoulette = true;  tlStats = Stats{}; meanAndSe(sc, r, 80000, m1, s1); uint64_t rays1 = tlStats.rays;
+        CHECK(std::fabs(m0 - m1) < 5 * std::sqrt(s0 * s0 + s1 * s1) + 1e-4);     // same expectation (no bias)
+        CHECK(rays1 < rays0 * 0.9);                                                // but fewer rays
+    }
+}
+
+TEST(light_sampling_counts_its_shadow_rays) {
+    Scene sc = cornellPath(0.0f);
+    Camera cam = makeCamera(sc);
+    sc.maxDepth = 3; sc.nee = true;
+    tlStats = Stats{};
+    for (int i = 0; i < 1000; i++) { Sampler smp(1, 0, (uint32_t)i); pathTrace(sc, cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f), smp); }
+    CHECK(tlStats.shadowRays > 1000 && tlStats.shadowRays < tlStats.rays);
+    sc.nee = false; tlStats = Stats{};
+    for (int i = 0; i < 1000; i++) { Sampler smp(1, 0, (uint32_t)i); pathTrace(sc, cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f), smp); }
+    CHECK(tlStats.shadowRays == 0);
 }
 
 int main() {

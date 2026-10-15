@@ -269,6 +269,10 @@ int runGui(const GuiOptions& opt) {
         ImGui::SliderInt("max bounces", &params.maxDepth, 0, 16);
         ImGui::BeginDisabled(params.integrator != Integrator::Path);
         ImGui::Checkbox("next event estimation (NEE)", &params.nee);
+        ImGui::BeginDisabled(!params.nee);
+        ImGui::Checkbox("multiple importance sampling (MIS)", &params.mis);
+        ImGui::EndDisabled();
+        ImGui::Checkbox("russian roulette", &params.russianRoulette);
         ImGui::SliderFloat("sky light (path)", &params.envScale, 0.0f, 2.0f, "%.2f");
         ImGui::EndDisabled();
         int lightModeIndex = params.lightMode == LightMode::Area ? 1 : 0;
@@ -334,7 +338,7 @@ int runGui(const GuiOptions& opt) {
             const RenderParams cur = job.params();
             const bool changed = params.jitter != cur.jitter || (uint64_t)std::max(0, seedInput) != cur.seed || params.threads != cur.threads ||
                                  params.maxDepth != cur.maxDepth || params.lightMode != cur.lightMode || params.lightSize != cur.lightSize ||
-                                 params.legacyNormals != cur.legacyNormals || params.integrator != cur.integrator || params.nee != cur.nee ||
+                                 params.legacyNormals != cur.legacyNormals || params.integrator != cur.integrator || params.nee != cur.nee || params.mis != cur.mis || params.russianRoulette != cur.russianRoulette ||
                                  params.envScale != cur.envScale || params.progressive != cur.progressive;
             if (changed) pendingRestart = true;
         }

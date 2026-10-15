@@ -23,6 +23,8 @@ struct RenderParams {
     float lightSize = 0;                      // area light edge length in metres; 0 = as in the glb
     Integrator integrator = Integrator::Classic;
     bool nee = true;                          // Path: next event estimation
+    bool mis = true;                          // Path + NEE: weigh light sampling against BSDF sampling (MIS)
+    bool russianRoulette = false;             // Path: random path termination (maxDepth stays a hard cap)
     float envScale = 0;                       // Path: sky brightness as environment light
     bool legacyNormals = false;               // true = M0 behaviour at silhouettes (see Scene::legacyNormals)
 };
@@ -122,6 +124,8 @@ private:
         scene_->integrator = params_.integrator;
         scene_->envScale = params_.envScale;
         scene_->nee = params_.nee;
+        scene_->mis = params_.mis;
+        scene_->russianRoulette = params_.russianRoulette;
         RenderSettings rs;
         rs.threads = params_.threads; rs.spp = params_.spp; rs.jitter = params_.jitter; rs.seed = params_.seed;
         state_ = State::Rendering;
@@ -142,7 +146,7 @@ private:
             rs.firstSample = done; rs.spp = total - done;
             Stats st;
             renderFrame(*scene_, *camera_, *film_, rs, params_.progressive ? nullptr : rowDone_.get(), &cancel_, st);
-            stats_.rays += st.rays; stats_.nodeVisits += st.nodeVisits; stats_.triTests += st.triTests;
+            stats_ += st;
             if (cancel_.load()) { consistent_ = false; break; }
             doneSpp_ = total;
             renderMs_ = elapsed();

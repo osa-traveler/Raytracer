@@ -5,7 +5,7 @@
 //
 // Options (initial values of the panel, or the settings of a headless render):
 //   --spp N  --jitter  --seed N  --threads N  --max-depth N  --exposure X  --gamma X
-//   --integrator classic|path  --env X  --no-nee   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
+//   --integrator classic|path  --env X  --no-nee  --no-mis  --rr   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
 //   --legacy-normals   (M0 behaviour at silhouettes: reproduces the M0 baseline images bit for bit)
 //   --light point|area  --light-size METRES   (area = soft shadows; point = the M0 baseline; size 0 = as in the glb)
 // Headless only:
@@ -56,6 +56,9 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--progressive") { p.progressive = true; o.progressiveSet = true; }
         else if (a == "--no-progressive") { p.progressive = false; o.progressiveSet = true; }
         else if (a == "--no-nee") p.nee = false;
+        else if (a == "--mis") p.mis = true;
+        else if (a == "--no-mis") p.mis = false;
+        else if (a == "--rr") p.russianRoulette = true;
         else if (a == "--env" && (v = next())) p.envScale = (float)std::atof(v);
         else if (a == "--legacy-normals") p.legacyNormals = true;
         else if (a == "--screenshot" && (v = next())) o.gui.screenshot = v;
@@ -88,6 +91,8 @@ static int runHeadless(const Options& opt) {
     scene.integrator = p.integrator;
     scene.envScale = p.envScale;
     scene.nee = p.nee;
+    scene.mis = p.mis;
+    scene.russianRoulette = p.russianRoulette;
     Camera cam = makeCamera(scene);
     std::printf("Loaded %s: %zu triangles, %zu materials, %zu BVH nodes, camera %s (%.0f ms)\n", p.scene.c_str(),
                 scene.tris.size(), scene.materials.size(), scene.nodes.size(), scene.camera.valid ? "from file" : "default", loadMs);

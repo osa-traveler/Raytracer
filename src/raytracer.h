@@ -213,7 +213,8 @@ struct Stats {
     uint64_t rays = 0;          // calls to Scene::intersect (camera, shadow, reflection, refraction)
     uint64_t nodeVisits = 0;    // BVH nodes whose box was tested
     uint64_t triTests = 0;      // ray-triangle tests
-    Stats& operator+=(const Stats& o) { rays += o.rays; nodeVisits += o.nodeVisits; triTests += o.triTests; return *this; }
+    uint64_t shadowRays = 0;    // Path mode: shadow rays of the light sampling (also counted in `rays`)
+    Stats& operator+=(const Stats& o) { rays += o.rays; nodeVisits += o.nodeVisits; triTests += o.triTests; shadowRays += o.shadowRays; return *this; }
 };
 inline thread_local Stats tlStats;
 
@@ -295,6 +296,9 @@ struct Scene {
     int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting); number of bounces in Path mode
     Integrator integrator = Integrator::Classic;
     bool nee = true;            // Path mode: next event estimation (direct light sampled at every vertex)
+    bool mis = true;            // Path mode, with nee: combine light sampling and BSDF sampling (power heuristic)
+    bool russianRoulette = false;   // Path mode: end paths at random after rrStartDepth bounces (unbiased, maxDepth stays a hard cap)
+    int rrStartDepth = 3;
     float envScale = 0.0f;      // Path mode: multiplier of the sky gradient seen as environment light (0 = only the area light emits)
 
     void buildBvh() {
@@ -755,12 +759,26 @@ inline Vec3 sampleCosineHemisphere(const Vec3& n, float u1, float u2) {
     return normalize(t * x + b * y + n * z);
 }
 
+// ---- probability densities of the two ways to pick a direction at a surface point, both per unit SOLID ANGLE
+// (needed to weigh them against each other, see pathTrace).
+// Cosine-weighted hemisphere sampling (BSDF sampling of a Lambert surface):  pdf = cos(theta) / pi.
+inline float bsdfPdfLambert(float cosTheta) { return std::max(cosTheta, 0.0f) * (1.0f / 3.14159265f); }
+// Uniform sampling of a point on the rectangle (pdf 1 / area per unit area) seen from a point at distance `dist`, where the
+// direction makes the angle with cosine `cosLight` with the light's normal. Changing from area to solid angle multiplies
+// the density by dist^2 / cosLight:   pdf = dist^2 / (area * cosLight).
+inline float lightPdfSolidAngle(const AreaLight& a, float dist2, float cosLight) {
+    return dist2 / (a.area * std::max(cosLight, 1e-6f));
+}
+inline float powerHeuristic(float pa, float pb) { float a2 = pa * pa, b2 = pb * pb; return a2 / std::max(a2 + b2, 1e-30f); }
+
 // Direct light reaching surface point x (normal N, true side Ng, Lambert albedo `albedo`) from the area light, one sample:
 // a uniformly random point p on the rectangle (pdf = 1 / area) and a shadow ray to it. The estimate is
-//     albedo / pi * Le * cos(theta at x) * cos(theta at the light) / dist^2 / pdf.
-// Unlike Classic shading this ignores glass (everything casts a full shadow) and the one-sided emitter gives no light
-// to points behind it.
-inline Vec3 sampleDirectLight(const Scene& sc, const Vec3& x, const Vec3& N, const Vec3& Ng, const Vec3& albedo, Sampler& smp) {
+//     albedo / pi * Le * cos(theta at x) * cos(theta at the light) / dist^2 / pdf
+//   = albedo * Le * (cos(theta at x) / pi) / pdfSolidAngle.
+// With `mis` it is multiplied by the power-heuristic weight of this technique against BSDF sampling, which could have
+// produced the same direction with density cos/pi. Unlike Classic shading this ignores glass (everything casts a full
+// shadow) and the one-sided emitter gives no light to points behind it.
+inline Vec3 sampleDirectLight(const Scene& sc, const Vec3& x, const Vec3& N, const Vec3& Ng, const Vec3& albedo, Sampler& smp, bool mis = false) {
     const AreaLight& a = sc.area;
     float u = smp.next1D(), v = smp.next1D();
     Vec3 p = a.center + a.edgeU * (u - 0.5f) + a.edgeV * (v - 0.5f);
@@ -769,24 +787,36 @@ inline Vec3 sampleDirectLight(const Scene& sc, const Vec3& x, const Vec3& N, con
     Vec3 wi = d * (1.0f / dist);
     float cosX = dot(N, wi), cosGeo = dot(Ng, wi), cosL = dot(a.normal, wi * -1.0f);
     if (cosX <= 0 || cosGeo <= 0 || cosL <= 0) return Vec3(0, 0, 0);
+    tlStats.shadowRays++;
     Hit blocker;
     if (sc.intersect(Ray{x + Ng * (EPS * 10), wi}, dist - EPS * 10, blocker)) return Vec3(0, 0, 0);
-    float w = a.radiance * a.area * cosX * cosL / dist2 * (1.0f / 3.14159265f);
-    return albedo * w;
+    float pdfLight = lightPdfSolidAngle(a, dist2, cosL), pdfBsdf = bsdfPdfLambert(cosX);
+    float weight = mis ? powerHeuristic(pdfLight, pdfBsdf) : 1.0f;
+    return albedo * (a.radiance * pdfBsdf / pdfLight * weight);
 }
 
 // Radiance along `ray` by a random walk. At each hit: the albedo multiplies the throughput (Lambert BRDF albedo/pi,
 // times cos / pdf = cos/pi, gives exactly albedo), then a cosine-sampled direction continues the path. Emission is
 // added when the path reaches the light (or, scaled by envScale, escapes into the sky). Only `maxDepth` bounces are
-// followed, so the result is the light that has bounced 0..maxDepth times (a biased-low but consistent estimate;
-// no Russian roulette, so that depth limits can be compared). The Classic direct-lighting code is not used here.
-// With next event estimation the light is counted exactly once per path: at every vertex by sampleDirectLight(), and a
-// BSDF-sampled ray that happens to hit the emitter adds nothing (only the camera ray, bounce 0, sees it directly).
-// Both modes have the same expectation for every bounce limit: NEE at vertex b (0-based) stands for the paths that
-// reach the light with the (b+1)-th ray, which the plain version only follows when maxDepth >= b + 1.
+// followed, so the result is the light that has bounced 0..maxDepth times (a biased-low but consistent estimate).
+// The Classic direct-lighting code is not used here.
+//
+// Three ways to count the direct light (Scene::nee, Scene::mis), all with the same expectation at every bounce limit:
+//   nee = false:  only BSDF sampling: a path that reaches the emitter adds its radiance.
+//   nee, !mis:    light sampling at every vertex (sampleDirectLight); a BSDF-sampled ray that hits the emitter adds
+//                 nothing (only the camera ray, bounce 0, sees it directly). Counted exactly once.
+//   nee, mis:     both techniques contribute, each weighted by the power heuristic of the two densities (of the SAME
+//                 direction, in solid angle), so weights of the two ways to produce a direction sum to 1: still counted once.
+// NEE at vertex b (0-based) stands for the paths that reach the light with the (b+1)-th ray, which the BSDF-only
+// version only follows when maxDepth >= b + 1.
+//
+// Russian roulette (Scene::russianRoulette): after rrStartDepth bounces, a path continues with probability p (the
+// largest throughput component, clamped to [0.05, 0.95]) and its throughput is divided by p; otherwise it ends. The
+// expectation is unchanged; dark paths, which matter little, are ended early. maxDepth stays a hard cap.
 inline Vec3 pathTrace(const Scene& sc, Ray ray, Sampler& smp) {
     Vec3 L(0, 0, 0), throughput(1, 1, 1);
     const bool hasLight = sc.area.valid;
+    float prevBsdfPdf = 0;                              // density (solid angle) with which the current ray was chosen
     for (int bounce = 0;; bounce++) {
         Hit h;
         bool hit = sc.intersect(ray, INF, h);
@@ -794,6 +824,11 @@ inline Vec3 pathTrace(const Scene& sc, Ray ray, Sampler& smp) {
             float tl = intersectAreaLight(sc.area, ray);
             if (tl > 0 && (!hit || tl < h.t)) {                                                   // the emitter is opaque
                 if (!sc.nee || bounce == 0) L += throughput * sc.area.radiance;
+                else if (sc.mis) {
+                    float cosL = dot(sc.area.normal, ray.d * -1.0f);
+                    float w = powerHeuristic(prevBsdfPdf, lightPdfSolidAngle(sc.area, tl * tl, cosL));
+                    L += throughput * (sc.area.radiance * w);
+                }
                 return L;
             }
         }
@@ -806,10 +841,16 @@ inline Vec3 pathTrace(const Scene& sc, Ray ray, Sampler& smp) {
         Vec3 N = front ? h.n : -h.n;
         float c = dot(N, Ng);
         if (c < 0.01f) N = normalize(N + Ng * (0.01f - c));
-        if (sc.nee && hasLight) L += throughput * sampleDirectLight(sc, h.p, N, Ng, m.base, smp);
+        if (sc.nee && hasLight) L += throughput * sampleDirectLight(sc, h.p, N, Ng, m.base, smp, sc.mis);
         throughput = throughput * m.base;               // metallic / transmission are ignored: everything is Lambertian
+        if (sc.russianRoulette && bounce >= sc.rrStartDepth) {
+            float p = std::min(0.95f, std::max(0.05f, std::max(throughput.x, std::max(throughput.y, throughput.z))));
+            if (smp.next1D() >= p) return L;
+            throughput = throughput * (1.0f / p);
+        }
         Vec3 d = sampleCosineHemisphere(N, smp.next1D(), smp.next1D());
         if (dot(d, Ng) <= 0) return L;                  // smooth normal pushed the sample below the real surface
+        prevBsdfPdf = bsdfPdfLambert(dot(N, d));
         ray = Ray{h.p + Ng * (EPS * 10), d};
     }
 }
@@ -911,7 +952,7 @@ inline int nextPassTotal(int done, int target) {
 inline void renderFrame(const Scene& scene, const Camera& cam, Film& film, const RenderSettings& rs,
                         std::atomic<uint8_t>* rowDone, const std::atomic<bool>* quit, Stats& total) {
     std::atomic<int> nextRow{0};
-    std::atomic<uint64_t> rays{0}, nodes{0}, tris{0};
+    std::atomic<uint64_t> rays{0}, nodes{0}, tris{0}, shadow{0};
     auto worker = [&]() {
         tlStats = Stats{};
         for (;;) {
@@ -929,10 +970,10 @@ inline void renderFrame(const Scene& scene, const Camera& cam, Film& film, const
             }
             if (rowDone) rowDone[y].store(1);
         }
-        rays += tlStats.rays; nodes += tlStats.nodeVisits; tris += tlStats.triTests;
+        rays += tlStats.rays; nodes += tlStats.nodeVisits; tris += tlStats.triTests; shadow += tlStats.shadowRays;
     };
     std::vector<std::thread> pool;
     for (unsigned i = 0; i < std::max(1u, rs.threads); i++) pool.emplace_back(worker);
     for (auto& t : pool) t.join();
-    total.rays += rays; total.nodeVisits += nodes; total.triTests += tris;
+    total.rays += rays; total.nodeVisits += nodes; total.triTests += tris; total.shadowRays += shadow;
 }

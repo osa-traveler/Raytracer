@@ -37,7 +37,10 @@ inline void writeRunConfig(const std::string& path, const RenderParams& p, const
     std::fprintf(f, "  \"progressive\": %s,\n", p.progressive ? "true" : "false");
     std::fprintf(f, "  \"pixel_sampling\": \"%s\",\n", p.jitter ? "uniform random point inside the pixel (jitter)" : "pixel centre");
     std::fprintf(f, "  \"rng\": {\"generator\": \"PCG32, one stream per (pixel, sample)\", \"seed\": %llu},\n", (unsigned long long)p.seed);
-    std::fprintf(f, "  \"integrator\": \"%s\",\n", scene.integrator == Integrator::Path ? (scene.nee ? "path (Lambert, cosine sampling, NEE)" : "path (Lambert, cosine sampling, no NEE)") : "classic (Whitted)");
+    std::fprintf(f, "  \"integrator\": \"%s\",\n", scene.integrator == Integrator::Path ? (scene.nee ? (scene.mis ? "path (Lambert, cosine sampling, NEE + MIS)" : "path (Lambert, cosine sampling, NEE)") : "path (Lambert, cosine sampling, no NEE)") : "classic (Whitted)");
+    std::fprintf(f, "  \"russian_roulette\": %s,\n", scene.russianRoulette ? "true" : "false");
+    if (scene.russianRoulette)
+        std::fprintf(f, "  \"russian_roulette_rule\": \"from bounce %d, survival p = largest throughput component clamped to [0.05, 0.95], throughput / p\",\n", scene.rrStartDepth);
     std::fprintf(f, "  \"environment_scale\": %g,\n", scene.envScale);
     std::fprintf(f, "  \"max_depth\": %d,\n", scene.maxDepth);
     std::fprintf(f, "  \"silhouette_normals\": \"%s\",\n", scene.legacyNormals ? "legacy (M0: flip the interpolated normal)" : "geometric facing + clamp");
@@ -64,8 +67,8 @@ inline void writeRunConfig(const std::string& path, const RenderParams& p, const
     std::fprintf(f, "  \"timing_ms\": {\"load_and_bvh\": %.2f, \"render_runs\": [", loadMs);
     for (size_t i = 0; i < renderMs.size(); i++) std::fprintf(f, "%s%.2f", i ? ", " : "", renderMs[i]);
     std::fprintf(f, "], \"render_min\": %.2f, \"render_median\": %.2f},\n", sorted.front(), median);
-    std::fprintf(f, "  \"counters_per_frame\": {\"rays\": %llu, \"bvh_node_visits\": %llu, \"triangle_tests\": %llu}\n",
-                 (unsigned long long)st.rays, (unsigned long long)st.nodeVisits, (unsigned long long)st.triTests);
+    std::fprintf(f, "  \"counters_per_frame\": {\"rays\": %llu, \"shadow_rays\": %llu, \"bvh_node_visits\": %llu, \"triangle_tests\": %llu}\n",
+                 (unsigned long long)st.rays, (unsigned long long)st.shadowRays, (unsigned long long)st.nodeVisits, (unsigned long long)st.triTests);
     std::fprintf(f, "}\n");
     std::fclose(f);
 }
