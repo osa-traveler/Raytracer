@@ -1,0 +1,5 @@
+Penumbra width on the floor, 10%-90% of the shadow-to-light brightness step, column x = 250 (512 spp references)
+light size [m]   width [px]   width on the floor [m]   width / size
+0.25            0.85        0.043                    0.171
+2               5.31        0.266                    0.133
+4               10.26       0.513                    0.128

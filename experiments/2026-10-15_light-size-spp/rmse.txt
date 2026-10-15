@@ -1,0 +1,12 @@
+size 0.25  spp 1   RMSE 0.048887
+size 0.25  spp 4   RMSE 0.022170
+size 0.25  spp 16  RMSE 0.010776
+size 0.25  spp 64  RMSE 0.005882
+size 2     spp 1   RMSE 0.157395
+size 2     spp 4   RMSE 0.069024
+size 2     spp 16  RMSE 0.035786
+size 2     spp 64  RMSE 0.018351
+size 4     spp 1   RMSE 0.167910
+size 4     spp 4   RMSE 0.083483
+size 4     spp 16  RMSE 0.043358
+size 4     spp 64  RMSE 0.023670

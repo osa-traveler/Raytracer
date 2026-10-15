@@ -26,3 +26,7 @@ experiments/2026-10-15_sampler-aa/*.png
 # area-light experiment: keep the comparison image and the numbers, not every full-size PNG
 experiments/2026-10-15_area-light-spp/*.png
 !experiments/2026-10-15_area-light-spp/shadows.png
+
+# light-size experiment: keep the comparison image and the numbers, not every full-size PNG
+experiments/2026-10-15_light-size-spp/*.png
+!experiments/2026-10-15_light-size-spp/size_x_spp.png
