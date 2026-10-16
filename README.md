@@ -1,10 +1,12 @@
 # Raytracer
 
 教科書の最初に出てくるような Whitted 式レイトレーサから出発して、モンテカルロ法(面光源のサンプリング)、**パストレーシング(NEE、段階描画)**まで拡張した、学習用のレイトレーサです。
-古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0〜M5、M7 完了、次は M6(フォトンマッピング)か M8)。
+古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0〜M5、M7 完了、M8 はテクスチャまで。次は M6(フォトンマッピング)か、M8 の続き(法線マップ・HDRI))。
 Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x480 で描画して、操作パネル付きのウィンドウに表示します。
 
-![最新の描画(面光源 64 spp)](docs/screenshots/2026-10-15_room-3spheres-area-light-64spp.png)
+![自作レイトレーサで描いた空冷ビートル(256 spp)](docs/screenshots/2026-10-17_beetle-room-rear-textured-256spp.png)
+
+*このレンダラーの最新の描画。約47万三角形の空冷ビートル + ガラス球 2 個(パストレーシング、PBR、面光源の NEE + MIS、Russian Roulette、baseColor・metallicRoughness テクスチャ、256 spp、640x480、描画 52 s)。ビートルのモデルは CGTrader「VW Classic Bettle」(Royalty Free License)で、モデルのファイル自体はこのリポジトリに含めていません。条件・時間・Blender との比較は [experiments/2026-10-16_beetle/notes.md](experiments/2026-10-16_beetle/notes.md)。*
 
 ## 機能
 
