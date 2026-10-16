@@ -1,7 +1,7 @@
 # Raytracer
 
 教科書の最初に出てくるような Whitted 式レイトレーサから出発して、モンテカルロ法(面光源のサンプリング)、**パストレーシング(NEE、段階描画)**まで拡張した、学習用のレイトレーサです。
-古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0〜M3、M5 完了、M4(NEE・MIS・Russian Roulette)もほぼ完了、次は M6 または M7)。
+古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0〜M5、M7 完了、次は M6(フォトンマッピング)か M8)。
 Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x480 で描画して、操作パネル付きのウィンドウに表示します。
 
 ![最新の描画(面光源 64 spp)](docs/screenshots/2026-10-15_room-3spheres-area-light-64spp.png)
@@ -15,13 +15,14 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
   - 拡散反射 + Blinn-Phong、**面光源(矩形をランダムにサンプリング、ソフトシャドウ)**または点光源、影(ガラスは薄い影)
   - 金属・低 roughness 材質の鏡面反射(フレネル)
   - ガラスの屈折(IOR 1.5、フレネル、全反射)
-- **パストレーシング**(`--integrator path`): Lambert、コサイン重み付きサンプリング、反射回数の指定、NEE(光源への直接サンプリング、`--no-nee` で切り替え)、**MIS**(光源サンプリングと BSDF サンプリングの組み合わせ、既定。`--no-mis`)、**Russian Roulette**(`--rr`)。拡散面どうしの間接光(カラーブリーディング)が描ける。Cornell Box で NEE により、同じ spp の誤差が約 1/4
+- **PBR の材質**(`--integrator path`、既定): glTF の metallic / roughness / transmission / IOR に対応。GGX のマイクロファセット(見える法線のサンプリング)、Fresnel、多重散乱の補正、滑らかなガラス(屈折・全反射)、鏡。拡散と鏡面のエネルギー保存を、白い炉と数値積分で確認。同じシーンを Blender Cycles と比べて、鋭い金属・鏡は 0.3% 以内で一致(他は 2〜5% の差)。旧 Lambert モデルは `--bsdf lambert`。粗いガラスは未対応
+- **パストレーシング**(`--integrator path`): コサイン重み付きサンプリング、反射回数の指定、NEE(光源への直接サンプリング、`--no-nee` で切り替え)、**MIS**(光源サンプリングと BSDF サンプリングの組み合わせ、既定。`--no-mis`)、**Russian Roulette**(`--rr`)。拡散面どうしの間接光(カラーブリーディング)が描ける。Cornell Box で NEE により、同じ spp の誤差が約 1/4
 - **段階描画**(ウィンドウの既定): 1→4→16→64→… spp と更新し、後から「+ samples」で追加できる。パスの分け方によらず、同じ画像
 - **画像のズーム・パン**(スクロール / ドラッグ / ダブルクリックで全体表示)、カーソル下のピクセル値の表示
 - モンテカルロ法: 再現性のある乱数(PCG32、ピクセルごとに独立。スレッド数によらず結果が同一)、1ピクセルのサンプル数(`--spp`)、ピクセル内のランダムな位置(ジッタ = アンチエイリアス)
 - 線形の浮動小数の film と、表示変換(露出・ガンマ)の分離。画像は PNG・PFM(線形)で保存、画像どうしの差(RMSE)を測れる
 - マルチスレッドで走査線ごとに描画し、描画の進行をウィンドウに表示
-- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(441項目)、再現できる実験(`experiments/`)
+- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(1959項目)、再現できる実験(`experiments/`)
 
 ## ビルドと実行
 
@@ -66,6 +67,7 @@ cmake --build build-release
 
 ## シーン・アセット
 
+- `Scene/Test/MaterialRow.glb`: 材質の球列(`tools/make_material_row.py` で生成。金・赤いプラスチック、roughness 0.05〜1.0、ガラス球 IOR 1.2 / 1.5 / 2.4、鏡)。PBR の確認用
 - `Scene/Test/Cornell.glb`: Cornell Box(`tools/make_cornell.py` で生成。赤壁・緑壁・白い箱2個・天井の面光源)。パストレーシング(`--integrator path`)の検証用
 - `Scene/Test/Room_2Spheres.glb`: 基準シーン(部屋、金属球、ガラス球。球は部屋の中心に対称)
 - `Scene/Test/Untitled.glb`: Blender で作成した検証用シーン(部屋、金属球、青い拡散球、ガラス球)
@@ -74,7 +76,7 @@ cmake --build build-release
 
 ## 今後の予定
 
-[ロードマップ](docs/RENDERER_ROADMAP.md)のとおり。次は M6(フォトンマッピング)か M7(PBR・Fresnel・GGX。鏡・ガラスを Path に入れる。M4 の残り = delta 成分での MIS の分岐もここで)。
+[ロードマップ](docs/RENDERER_ROADMAP.md)のとおり。次は M6(フォトンマッピング。ガラス越しの光のコースティクスがちょうど題材)か M8(HDRI・テクスチャ・複雑なシーン)。
 そのあと、NEE・MIS、フォトンマッピング、PBR、HDRI などへ進む予定です。
 
 ## ドキュメント

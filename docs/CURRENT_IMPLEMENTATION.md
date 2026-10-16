@@ -19,13 +19,13 @@
 
 | 項目 | 内容 |
 |---|---|
-| 方式 | Whitted 式(古典的)レイトレーシング + 面光源の確率的サンプリング(モンテカルロ)。**もう1つの方式として、最小のパストレーシング(M2、`--integrator path`)**。Classic は拡散面どうしの間接光を持たない |
+| 方式 | Whitted 式(古典的)レイトレーシング + 面光源の確率的サンプリング(モンテカルロ)。**もう1つの方式として、パストレーシング(M2〜、`--integrator path`)。材質は、PBR(M7、既定)または Lambert(M2)**。Classic は拡散面どうしの間接光を持たない |
 | 言語・ライブラリ | C++17、SDL2(表示)、Dear ImGui(操作パネル)。その他の外部ライブラリなし |
 | 解像度 | 640x480 固定(`WIDTH` / `HEIGHT`) |
 | 並列化 | `std::thread`、ハードウェアスレッド数。走査線(行)単位で `atomic` カウンタから取得 |
 | 画面 | **操作パネル付きのウィンドウ**(左に画像、右に Dear ImGui のパネル)。描画は別スレッドで、完了した行から画像に出る(プログレッシブ表示では、パスごとに画像全体が更新される)。画像はズーム・パンできる。パネル: シーン(GLB のパス + 一覧)、サンプル数、ジッタ、シード、スレッド数、最大反射回数、光源(点 / 面)と面光源の大きさ、**Render** / **Cancel**、露出・ガンマ(再描画なしで即反映)、状態(時間・レイ数・Mrays/s)、保存(PNG + PFM + JSON)。起動時に、1回描画する |
 | 出力 | 画面なし(`--headless`)の描画の結果は、`output.ppm`(8bit)。`--out PREFIX` を付けると `PREFIX.png`(表示用)、`PREFIX.pfm`(線形の浮動小数)、`PREFIX.json`(設定・時間・カウンタ)を保存 |
-| 起動 | `./build/raytrace [GLBファイル] [オプション]`。引数なしは `Scene/Test/Untitled.glb`(リポジトリのルートで実行)。パネルの初期値、または画面なし描画の設定: `--spp N`(1ピクセルのサンプル数、既定1)、`--jitter`(ピクセル内のランダムな位置に置く。既定はオフ = ピクセル中心)、`--seed N`(乱数のシード、既定1)、`--threads N`、`--max-depth N`(最大反射回数、既定6)、`--light point|area`(既定 area)、`--light-size METRES`(面光源の一辺。0 = GLB のとおり)、`--legacy-normals`(輪郭の扱いを M0 の旧方式にする。M0 の基準画像と過去の実験を、ビット単位で再現する)、`--exposure X`、`--gamma X`、`--accel none|median|sah`、`--no-ordered`、`--no-any-hit`、`--integrator classic|path`(既定 classic)、`--no-nee`(Path の NEE をオフ)、`--mis` / `--no-mis`(Path の MIS、既定オン)、`--rr`(Path の Russian Roulette、既定オフ)、`--env X`(Path の空の光、既定 0)、`--progressive` / `--no-progressive`(段階描画。ウィンドウの既定はオン)。画面なし: `--headless`、`--out PREFIX`、`--repeat N`(N回描画して時間を記録)、`--note 文字列`。ウィンドウ: `--screenshot FILE.png`(最初の描画の後にウィンドウ全体を保存して終了)、`--gui-selftest PREFIX`(Render ボタンと露出スライダーの自動操作テスト)。`./build/raytrace --rmse A.pfm B.pfm` は2つの線形画像の差(RMSE)を表示 |
+| 起動 | `./build/raytrace [GLBファイル] [オプション]`。引数なしは `Scene/Test/Untitled.glb`(リポジトリのルートで実行)。パネルの初期値、または画面なし描画の設定: `--spp N`(1ピクセルのサンプル数、既定1)、`--jitter`(ピクセル内のランダムな位置に置く。既定はオフ = ピクセル中心)、`--seed N`(乱数のシード、既定1)、`--threads N`、`--max-depth N`(最大反射回数、既定6)、`--light point|area`(既定 area)、`--light-size METRES`(面光源の一辺。0 = GLB のとおり)、`--legacy-normals`(輪郭の扱いを M0 の旧方式にする。M0 の基準画像と過去の実験を、ビット単位で再現する)、`--exposure X`、`--gamma X`、`--accel none|median|sah`、`--no-ordered`、`--no-any-hit`、`--bsdf lambert|pbr`(Path の材質、既定 pbr)、`--no-multiscatter`、`--env-uniform X`、`--integrator classic|path`(既定 classic)、`--no-nee`(Path の NEE をオフ)、`--mis` / `--no-mis`(Path の MIS、既定オン)、`--rr`(Path の Russian Roulette、既定オフ)、`--env X`(Path の空の光、既定 0)、`--progressive` / `--no-progressive`(段階描画。ウィンドウの既定はオン)。画面なし: `--headless`、`--out PREFIX`、`--repeat N`(N回描画して時間を記録)、`--note 文字列`。ウィンドウ: `--screenshot FILE.png`(最初の描画の後にウィンドウ全体を保存して終了)、`--gui-selftest PREFIX`(Render ボタンと露出スライダーの自動操作テスト)。`./build/raytrace --rmse A.pfm B.pfm` は2つの線形画像の差(RMSE)を表示 |
 | 操作 | Esc(文字入力中を除く)またはウィンドウを閉じて終了。**画像の拡大縮小**: スクロール(トラックパッドの2本指)またはマウスホイールでカーソル位置を中心にズーム(10%〜6400%)、ドラッグで移動、ダブルクリックで全体表示。下のボタン Fit / 100% / 200% / 400% / 800%。100% 以上はピクセルをくっきり表示(補間なし)。カーソル下のピクセルの座標、線形の RGB 値、サンプル数を表示する(表示だけの機能で、描画結果は変わらない) |
 | ビルド | CMake 3.24 以上。**描画・計測は `build-release/`(`-DCMAKE_BUILD_TYPE=Release`、`-O3 -DNDEBUG`)で行う**。`build/` はデバッグ用の Debug ビルド(最適化なし。Release の約11倍遅い)。ビルド種類を指定しないと Release になる。**初回の設定時に、ネットワークから Dear ImGui を取得する**(固定バージョン + ハッシュ検証。[THIRD_PARTY.md](THIRD_PARTY.md)) |
 
@@ -52,7 +52,7 @@ GLB を読む → 三角形(ワールド座標)に展開 → BVH 構築
 | 三角形メッシュ(mode 4)、インデックス 8/16/32bit | 三角形以外のプリミティブ(読み飛ばす) |
 | 頂点位置・法線(法線がなければ面法線) | テクスチャ、UV、頂点カラー、法線マップ |
 | ノードの変換(translation / rotation / scale / matrix)、子ノード | スキニング、アニメーション |
-| 材質: `baseColorFactor`、`metallicFactor`、`roughnessFactor`、`KHR_materials_transmission` の係数 | `KHR_materials_ior`(屈折率は1.5固定)、クリアコート、発光 |
+| 材質: `baseColorFactor`、`metallicFactor`、`roughnessFactor`、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_specular`(`specularFactor` だけ)の係数。Path の PBR が全部使う。Classic が使うのは、transmission と roughness / metallic の一部で、屈折率は1.5固定 | クリアコート、発光、テクスチャ、`specularColorFactor`、volume(減衰・厚み) |
 | カメラ: シーン内の最初の透視カメラ | 正射影カメラ、複数カメラの切り替え |
 | 面光源(矩形): ノードの extras(`rt_light_type` = "rect"、`rt_size_x`、`rt_size_y`、`rt_radiance`)と、ノードの変換。描画に使う(M1) | ライト(`KHR_lights_punctual`)。Blender のエリアライト自体は GLB に出力されないので、Blender のカスタムプロパティで補っている |
 
@@ -149,7 +149,7 @@ GLB を読む → 三角形(ワールド座標)に展開 → BVH 構築
 
 `pathTrace()`(`src/raytracer.h`)。Classic の `trace()` とは別の経路で、直接照明のコードは使わない(二重計上なし)。
 
-- **材質**: すべて Lambert 拡散。アルベド = `baseColor`。metallic、roughness、transmission(鏡・ガラス)は**無視する**(Room_2Spheres の金属球・ガラス球も拡散球になる)。
+- **材質**(`--bsdf lambert`、この章の説明。**既定の PBR は 8c 章**): すべて Lambert 拡散。アルベド = `baseColor`。metallic、roughness、transmission(鏡・ガラス)は**無視する**(Room_2Spheres の金属球・ガラス球も拡散球になる)。
 - **経路**: カメラ → 交点 → コサイン重み付き半球サンプリング(PDF = cos/π)で次の方向 → …。`BSDF × cos / PDF` はアルベドになり、スループットに掛ける。
 - **発光**: 面光源は三角形ではないので、`intersectAreaLight()` で別に交差判定する(発光面=表側のみ。裏側は見えない。光源は不透明で、手前の三角形に隠される)。光に当たったら `スループット × 放射輝度` を足して終わる。カメラから光源そのものも見える。
 - **環境光**: 何にも当たらなかったレイは、空のグラデーション × `--env`(既定 0 = 面光源だけが光る)。
@@ -161,9 +161,36 @@ GLB を読む → 三角形(ワールド座標)に展開 → BVH 構築
 - 検証(`tests/test_main.cpp`、NEE の一致・ノイズも): コサイン分布の平均、光源の片面・範囲、巨大光源の下の床の解析解(ρ·Le)、反射回数での単調増加、色移り、スレッド数への非依存。
 - **Cornell Box**: `Scene/Test/Cornell.glb`(`tools/make_cornell.py` で生成。光源 0.5 m、放射輝度 15)。実験は `experiments/2026-10-15_m2-cornell/`。
 
+## 8c. PBR の材質(M7、`--bsdf pbr`)
+
+`--bsdf lambert|pbr`(パネルの「surface model」)。**Lambert** は 8b のとおり(M2 の実験を、ビット単位で再現する)。**PBR** がアプリの既定(`Scene` の既定は Lambert で、`RenderParams` が PBR を指定する)。Classic 方式は、この設定の対象外。
+
+**材質(glTF の metallic-roughness)**: `base`、`metallic`、`roughness`、`transmission`、`ior`(`KHR_materials_ior`、既定 1.5)、`specular`(`KHR_materials_specular` の `specularFactor`、既定 1)。
+
+**不透明な面**(`PbrBsdf`、局所座標で法線 = +z):
+```text
+f = 拡散色 × (1 − Es(μo)) (1 − Es(μi)) / (π (1 − Ē))                 拡散(Es: 鏡面ローブの方向アルベド)
+  + F(wo·h) D(h) G2 / (4 cosθo cosθi)                                 GGX の鏡面(単一散乱)
+  + Fms (1 − E(μo)) (1 − E(μi)) / (π (1 − Ē_E))                       多重散乱(Kulla–Conty)
+```
+- 拡散色 = `base × (1 − metallic)`。F は Schlick: `F = f0 + (f90 − f0)(1 − wo·h)^5`、`f0 = mix(((ior−1)/(ior+1))² × specular, base, metallic)`、`f90 = mix(specular, 1, metallic)`。alpha = roughness²。
+- D = GGX(Trowbridge–Reitz)。G2 = height-correlated Smith。
+- **Es(μ)**(方向アルベド)は、`SpecularAlbedoLut`(μ 24 × roughness 24 の2つの表 A, B。`Es = f0·A + f90·B`)で引く。起動後の最初の使用時に作る(Release で約0.1秒、見える法線の層化サンプル 48×48)。拡散の重みを `(1−Es(μo))(1−Es(μi))/(π(1−Ē))` にすると、拡散のアルベドがちょうど `1 − Es(μo)` になり、鏡面と合わせて 1 を超えない。glTF 仕様どおりの `(1−F(v·h))×拡散 + 鏡面` は、グレージング角で方向アルベドが 1.4 まで上がった(数値積分)ので使わない。
+- **多重散乱**(`--no-multiscatter` で切る): 単一散乱の GGX は、粗い金属で roughness 0.5 / 0.75 / 1.0 で 11% / 35% / 61% のエネルギーを失う(白い炉)。`E(μ) = A + B`(F = 1 のときのアルベド)、`Favg = f0 + (f90−f0)/21`、`Fms = Favg² Ē_E / (1 − Favg(1 − Ē_E))` の余弦ローブを足す。拡散と同じ方法でサンプルする。
+- **サンプリング**: 鏡面ローブを確率 `pSpec`(鏡面と拡散 + 多重散乱のアルベドの比、[0.05, 0.95] に制限)で選ぶ。鏡面は見える法線のサンプリング(VNDF、Heitz 2018)、PDF = `G1(wo) D(h) / (4 cosθo)`。拡散は余弦サンプリング。PDF は2つの混合(選択確率を含む)。重み = `f cosθi / pdf`。
+- **鏡**(alpha < 1e-3、つまり roughness < 0.032): delta ローブ。確率 `pSpec` で選び、重み = `F(cosθo) / pSpec`。`eval()` / `pdf()` は、delta でないローブだけ。roughness 0.05 は、鋭いが delta ではない。
+
+**ガラス**(`transmission > 0`): 確率 = transmission で、滑らかな誘電体として扱う(それ以外は不透明な面)。厳密な Fresnel(偏光なし)の確率で反射し、そうでなければ屈折する(`refractDirection`、全反射を処理)。屈折の寄与に base color を掛け、放射輝度を `(n_i/n_t)²` 倍する(入るときと出るときで打ち消し合う)。表裏は、幾何法線で決める(閉じた立体を仮定)。**粗いガラス(つや消し)は未対応で、滑らかなガラスとして扱う。**
+
+**光源サンプリングと delta**: 鏡・ガラスの後は、delta なので、光源サンプリングをしない(`prevDelta`)。その後に光源に当たったら、重み 1 で足す(M4 の残りだった、delta 成分での MIS の分岐)。delta でないローブでは、これまでの MIS(混合 PDF とのパワーヒューリスティック)。ガラスは、影の判定では不透明な遮蔽物なので、**ガラス越しの光は、BSDF サンプリングだけが拾う**(コースティクスはざらつく)。
+- 反射回数の上限は、ガラスの境界ごとに1回数える(球を通るのに2回)。ガラスを描くときは、`--max-depth` を大きめにする。
+- **Blender Cycles との比較**(`experiments/2026-10-16_m7-cycles/`、別プロセスの画面なし Blender 5.2、同じ光源・空・カメラ、1024 spp): 球ごとの比は、鋭い金属(roughness 0.5 以下)と鏡が 1.000〜1.003、粗い金(0.75、1.0)が 1.026 と 1.047、プラスチックが 1.023〜1.050、ガラスが 1.020〜1.033(このレンダラーのほうが明るい)。原因は未解決(鏡面を厳密な Fresnel にしても縮まらなかった)。
+- 白い炉(`--env-uniform 1`): 鏡 0.9996、ガラス 1.0000、金属(roughness 0.1〜1.0)0.998〜1.003、プラスチック 0.9987〜0.9999(`experiments/2026-10-16_m7-furnace/`)。
+- 検証(`tests/test_main.cpp`): フレネル、GGX の正規化・シャドウイング、VNDF の PDF が確率に一致、サンプリングの重みが数値積分と一致して 1 を超えない、全角度でのアルベド(プラスチック < 1.005)、相反性、材質のパラメータ(ローブの選択)、glTF の `ior` / `specular` の読み込み、白い炉(ガラス・鏡・粗い面・多重散乱)、スネルの法則、ガラス板越しの光のずれと減衰、鏡越しの光源、3方式の期待値の一致(光沢面・ガラス越し)、スレッド数への非依存。
+
 ## 9. 既知の制約・近似
 
-- Classic 方式の光輸送は、直接照明と、鏡面反射・屈折だけ(環境光の定数で間接光を代用)。拡散面どうしの間接光は、Path 方式だけが持つ(上の 8b 章)。Path 方式は Lambert のみで、鏡・ガラス・スペキュラは未対応。したがって、**delta 成分(鏡・ガラス)での MIS の分岐は未実装**で、MIS の効果が大きいはずの、つやのある面での比較も未実施(M7)。
+- Classic 方式の光輸送は、直接照明と、鏡面反射・屈折だけ(環境光の定数で間接光を代用)。拡散面どうしの間接光は、Path 方式だけが持つ(上の 8b 章)。Path 方式の材質は、Lambert(M2)または PBR(M7、8c章)。PBR の制約: 粗いガラス(つや消し)は未対応、ガラスの影は完全な影(ガラス越しの光は BSDF サンプリングだけが拾い、コースティクスはざらつく)、ガラスの色(base color)は境界を通るたびに掛かる(体積の減衰ではない)、テクスチャ・発光・クリアコートなしの glTF の一部、空の光は光源サンプリングの対象外。
 - 実験の描画時間のうち、M2・M3・NEE の実験(2026-10-15)の当時の記録は Debug の値。Release で測り直した値は `experiments/2026-10-16_release-timings/`(Debug の約 18〜26 倍速い)。
 - 光源は面光源(矩形)1個のみ。1つの点につき、光源のサンプルは1つ(サンプルを増やす手段は、ピクセルのサンプル数だけ)。光源側と BSDF 側のサンプルを組み合わせる MIS は未実装(M4)。
 - 面光源の明るさの較正は、部屋の中心の1点での平均。距離減衰が入っているので、旧点光源の画像とは、全体が異なる(RMSE 0.27、基準の面光源画像との比較)。
@@ -193,7 +220,7 @@ GLB を読む → 三角形(ワールド座標)に展開 → BVH 構築
 
 ## 11. テスト
 
-`./build-release/raytrace_tests`(または `ctest --test-dir build-release`)。441項目、すべて成功(2026-10-16)。
+`./build-release/raytrace_tests`(または `ctest --test-dir build-release`)。1959項目、すべて成功(2026-10-16)。
 
 - レイと三角形: 当たり(距離・重心座標)、外れ(外側、斜辺や辺のぎりぎり外)、平行、裏から(両面)、辺・頂点上、原点の後ろ(t < 0)。
 - シーンの交差: 最近傍の選択、`tmax` の制限、原点の後ろの無視。
