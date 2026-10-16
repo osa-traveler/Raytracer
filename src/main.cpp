@@ -10,6 +10,8 @@
 //   --integrator classic|path  --env X  --no-nee  --no-mis  --rr   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
 //   --legacy-normals   (M0 behaviour at silhouettes: reproduces the M0 baseline images bit for bit)
 //   --no-textures      (ignore baseColor / metallicRoughness textures and use the material factors only; default: use them)
+//   --clamp-indirect X  --glossy-floor R  --glass-shadows   (less noise for a little accuracy, Path mode, all off by default:
+//                      clamp the radiance of paths with 2+ scatterings to X / give glossy surfaces seen by indirect light at least roughness R / shadow rays pass through glass)
 //   --no-normal-maps   (ignore normal maps, keep the other textures; default: use them)
 //   --cull-backfaces   (honour glTF doubleSided = false: the back of a one-sided surface is invisible to all rays; default off = every surface double sided)
 //   --light point|area  --light-size METRES   (area = soft shadows; point = the M0 baseline; size 0 = as in the glb)
@@ -21,6 +23,7 @@
 //   --repeat N      render N times to record timings
 //   --note TEXT     free text stored in the json
 // Window only:
+//   --screenshot-hover X,Y     with --screenshot: hold the mouse at window position X,Y so that its tooltip is in the picture
 //   --screenshot FILE.png      save the whole window after the first render finished, then exit
 //   --gui-selftest PREFIX      scripted check of the Render button and the exposure slider (writes PREFIX_1/2/3.png, exit code 0 = pass)
 //   raytrace --rmse A.pfm B.pfm   root-mean-square difference of two linear images
@@ -77,7 +80,11 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--cull-backfaces") p.cullBackfaces = true;
         else if (a == "--no-textures") p.textures = false;
         else if (a == "--no-normal-maps") p.normalMaps = false;
+        else if (a == "--clamp-indirect" && (v = next())) p.clampIndirect = (float)std::max(0.0, std::atof(v));
+        else if (a == "--glossy-floor" && (v = next())) p.glossyFloor = (float)std::min(1.0, std::max(0.0, std::atof(v)));
+        else if (a == "--glass-shadows") p.glassShadows = true;
         else if (a == "--screenshot" && (v = next())) o.gui.screenshot = v;
+        else if (a == "--screenshot-hover" && (v = next())) std::sscanf(v, "%f,%f", &o.gui.hoverX, &o.gui.hoverY);
         else if (a == "--gui-selftest" && (v = next())) o.gui.selfTest = v;
         else if (a.rfind("--", 0) != 0) p.scene = a;
         else { std::fprintf(stderr, "unknown or incomplete option: %s\n", a.c_str()); return false; }
@@ -107,6 +114,9 @@ static int runHeadless(const Options& opt) {
     scene.cullBackfaces = p.cullBackfaces;
     scene.useTextures = p.textures;
     scene.useNormalMaps = p.normalMaps;
+    scene.clampIndirect = p.clampIndirect;
+    scene.glossyFloor = p.glossyFloor;
+    scene.glassShadows = p.glassShadows;
     scene.integrator = p.integrator;
     scene.envScale = p.envScale;
     scene.nee = p.nee;

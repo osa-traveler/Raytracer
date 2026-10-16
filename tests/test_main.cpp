@@ -1803,6 +1803,190 @@ TEST(normal_map_changes_the_picture_and_leaves_scenes_without_one_alone) {
     CHECK(sameFilm(c, d));
 }
 
+// ---- noise-for-accuracy switches (Path): Scene::clampIndirect, glossyFloor, glassShadows
+
+TEST(clamp_contribution_keeps_the_colour_and_caps_the_largest_component) {
+    Vec3 c = clampContribution(Vec3(8, 4, 2), 2.0f);
+    CHECK_NEAR(c.x, 2.0, 1e-6); CHECK_NEAR(c.y, 1.0, 1e-6); CHECK_NEAR(c.z, 0.5, 1e-6);     // scaled by 2/8: the hue is unchanged
+    c = clampContribution(Vec3(1, 0.5f, 0.25f), 2.0f); CHECK(c.x == 1.0f && c.y == 0.5f && c.z == 0.25f);   // below the limit: untouched
+    c = clampContribution(Vec3(8, 4, 2), 0.0f);        CHECK(c.x == 8.0f && c.y == 4.0f && c.z == 2.0f);    // 0 = off
+}
+
+static double meanLuminance(const Film& f) {
+    double s = 0;
+    for (int y = 0; y < f.h; y++) for (int x = 0; x < f.w; x++) { Vec3 c = f.pixel(x, y); s += 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z; }
+    return s / ((double)f.w * f.h);
+}
+
+TEST(indirect_clamp_leaves_direct_light_alone_and_only_removes_energy_from_later_bounces) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    applyDefaultLighting(sc); configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr;
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.spp = 2; rs.jitter = true; rs.seed = 6; rs.threads = 2;
+    Stats st;
+    auto render = [&](int depth, float clamp) {
+        Scene s2 = sc; s2.maxDepth = depth; s2.clampIndirect = clamp;
+        Film f(WIDTH, HEIGHT); renderFrame(s2, cam, f, rs, nullptr, nullptr, st); return f;
+    };
+    Film direct = render(1, 0.0f), directClamped = render(1, 0.01f);
+    CHECK(sameFilm(direct, directClamped));                       // one bounce = only direct light (and the light seen directly): nothing to clamp
+    Film full = render(4, 0.0f), huge = render(4, 1e9f), tight = render(4, 0.05f);
+    CHECK(sameFilm(full, huge));                                  // a limit nothing reaches changes nothing
+    CHECK(!sameFilm(full, tight));
+    double mFull = meanLuminance(full), mTight = meanLuminance(tight), mDirect = meanLuminance(direct);
+    CHECK(mTight < mFull);                                        // clamping removes energy ...
+    CHECK(mTight >= mDirect - 1e-9);                              // ... but only from the indirect part: the direct light stays
+}
+
+TEST(glossy_floor_raises_roughness_only_when_asked_and_keeps_the_energy) {
+    Material mirror = pbrMat({0.9f, 0.9f, 0.9f}, 1.0f, 0.0f);     // a perfect mirror: a delta lobe
+    PbrBsdf plain = PbrBsdf::make(mirror, true), same = PbrBsdf::make(mirror, true, 0.0f), blurred = PbrBsdf::make(mirror, true, 0.3f);
+    CHECK(plain.specDelta && same.specDelta && same.rough == plain.rough);                   // floor 0: exactly the old BSDF
+    CHECK(!blurred.specDelta && std::fabs(blurred.rough - 0.3f) < 1e-6f);                    // floor 0.3: a glossy lobe, no longer a mirror
+    Material rough = pbrMat({0.8f, 0.2f, 0.2f}, 0.0f, 0.6f);
+    CHECK(std::fabs(PbrBsdf::make(rough, true, 0.3f).rough - 0.6f) < 1e-6f);                  // an already rougher surface is not made smoother
+    // the floor spreads the lobe but conserves the energy: the directional albedo (mean of the sample weights) hardly changes
+    Material paint = pbrMat({0.9f, 0.6f, 0.05f}, 0.0f, 0.05f);
+    for (float mu : {0.9f, 0.5f}) {
+        Vec3 wo(std::sqrt(1 - mu * mu), 0, mu);
+        double a[2] = {0, 0}; int n = 200000;
+        for (int k = 0; k < 2; k++) {
+            PbrBsdf b = PbrBsdf::make(paint, true, k == 0 ? 0.0f : 0.3f);
+            for (int i = 0; i < n; i++) {
+                Sampler smp(5, 0, (uint32_t)i);
+                BsdfSample bs = b.sample(wo, smp.next1D(), smp.next1D(), smp.next1D());
+                if (bs.valid) a[k] += 0.2126 * bs.weight.x + 0.7152 * bs.weight.y + 0.0722 * bs.weight.z;
+            }
+            a[k] /= n;
+        }
+        CHECK(a[0] <= 1.0 && a[1] <= 1.0);
+        CHECK(std::fabs(a[0] - a[1]) < 0.05);
+    }
+}
+
+static Scene floorSphereLight(float sphereRough) {
+    // a diffuse floor, a nearly mirror-like sphere and a small light: the floor next to the sphere gets light only through the sphere's
+    // reflection of the light (a reflected caustic), which is the classic firefly of a glossy-after-diffuse path
+    Scene sc;
+    sc.materials = {diffuseMat({0.6f, 0.6f, 0.6f}), pbrMat({0.95f, 0.95f, 0.95f}, 1.0f, sphereRough)};
+    sc.tris.push_back(makeTri({-20, 0, -20}, {-20, 0, 20}, {20, 0, -20}));
+    sc.tris.push_back(makeTri({20, 0, 20}, {20, 0, -20}, {-20, 0, 20}));
+    addSphere(sc, Vec3(0, 0.5f, 0), 0.5f, 1);
+    AreaLight a; a.valid = true; a.center = Vec3(1.2f, 2.5f, 0.0f); a.edgeU = Vec3(0.4f, 0, 0); a.edgeV = Vec3(0, 0, 0.4f);
+    a.normal = Vec3(0, -1, 0); a.area = 0.16f; a.radiance = 40.0f;
+    sc.area = sc.areaFile = a;
+    sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr; sc.maxDepth = 4; sc.nee = true; sc.mis = true;
+    sc.buildBvh();
+    return sc;
+}
+
+TEST(glossy_floor_changes_nothing_seen_directly_and_cuts_the_noise_of_reflected_light) {
+    Scene plain = floorSphereLight(0.02f), blurred = plain;
+    blurred.glossyFloor = 0.35f;
+    // camera rays that hit the sphere first, one bounce (the direct light and the highlight seen straight from the camera): the first
+    // vertex is never blurred, so nothing changes. (With more bounces the path may reach the glossy sphere again, and that is blurred.)
+    Scene plain1 = plain, blurred1 = blurred;
+    plain1.maxDepth = blurred1.maxDepth = 1;
+    int same = 0, total = 0, lit = 0;
+    for (int i = 0; i < 400; i++) {                                // a camera at (3, 1.5, 0) looking at the part of the sphere that faces the light
+        float f = (i % 20) / 19.0f, g = (i / 20) / 19.0f;
+        Vec3 target(0.05f + 0.35f * f, 0.75f + 0.3f * g, 0.0f);
+        Ray r{Vec3(3.0f, 1.5f, 0.0f), normalize(target - Vec3(3.0f, 1.5f, 0.0f))};
+        Sampler s1(3, 0, (uint32_t)i), s2(3, 0, (uint32_t)i);
+        Vec3 a = pathTrace(plain1, r, s1), b = pathTrace(blurred1, r, s2);
+        total++; same += (a.x == b.x && a.y == b.y && a.z == b.z); lit += a.x > 0.01f;
+    }
+    CHECK(same == total);
+    CHECK(lit > 20);                                              // not an empty test: the camera does see the light's reflection in some of these rays
+    // the floor beside the sphere, on the side of the light: besides the direct light it gets the light reflected by the sphere
+    // (measured over a grid of spots: the standard error drops to 0.27 - 0.39 of the plain value while the mean moves by 0.1 - 3%)
+    Ray down{Vec3(1.0f, 1.0f, 0.0f), Vec3(0, -1, 0)};
+    double m0, se0, m1, se1;
+    meanAndSe(plain, down, 60000, m0, se0); meanAndSe(blurred, down, 60000, m1, se1);
+    CHECK(m0 > 0.05 && m1 > 0.05);
+    CHECK(se1 < 0.6 * se0);                                       // the blurred version is clearly less noisy
+    CHECK(std::fabs(m1 - m0) < 0.1 * m0);                         // and the brightness hardly moves (it is biased a little on purpose)
+}
+
+// A floor, a thin slab of glass (two parallel faces 2 cm apart) between it and an area light above.
+static Scene floorGlassLight() {
+    Scene sc;
+    sc.materials = {diffuseMat({0.6f, 0.6f, 0.6f}), pbrMat({1, 1, 1}, 0.0f, 0.0f, 1.0f)};
+    sc.tris.push_back(makeTri({-30, 0, -30}, {-30, 0, 30}, {30, 0, -30}));
+    sc.tris.push_back(makeTri({30, 0, 30}, {30, 0, -30}, {-30, 0, 30}));
+    auto pane = [&](float y, float ny) {
+        for (int k = 0; k < 2; k++) {
+            Triangle t = k == 0 ? makeTri({-30, y, -30}, {-30, y, 30}, {30, y, -30}) : makeTri({30, y, 30}, {30, y, -30}, {-30, y, 30});
+            t.n0 = t.n1 = t.n2 = Vec3(0, ny, 0); t.material = 1;
+            sc.tris.push_back(t);
+        }
+    };
+    pane(1.00f, -1.0f); pane(1.02f, 1.0f);                        // the lower face points down, the upper one up (outward), so a ray knows whether it enters or leaves the glass
+    // the light is close to the glass (0.8 m above it), so that light sampling and BSDF sampling have clearly different densities and an MIS weight there would be far from 1
+    AreaLight a; a.valid = true; a.center = Vec3(0, 1.8f, 0); a.edgeU = Vec3(2, 0, 0); a.edgeV = Vec3(0, 0, 2);
+    a.normal = Vec3(0, -1, 0); a.area = 4.0f; a.radiance = 3.0f;
+    sc.area = sc.areaFile = a;
+    sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr; sc.maxDepth = 8; sc.nee = true; sc.mis = true;
+    sc.buildBvh();
+    return sc;
+}
+
+TEST(shadow_rays_through_thin_glass_agree_with_following_the_light_by_bsdf_sampling_and_are_much_less_noisy) {
+    Scene off = floorGlassLight(), on = off;
+    on.glassShadows = true;
+    // the floor under the pane, seen from below the pane: its light arrives through the glass
+    Ray down{Vec3(0.3f, 0.5f, 0.2f), Vec3(0, -1, 0)};
+    double mOff, seOff, mOn, seOn;
+    meanAndSe(off, down, 200000, mOff, seOff); meanAndSe(on, down, 200000, mOn, seOn);        // the same number of samples, so the standard errors compare the noise
+    CHECK(mOff > 0.05);                                           // the floor is lit at all
+    CHECK(std::fabs(mOn - mOff) < 4 * std::sqrt(seOn * seOn + seOff * seOff) + 0.03 * mOff);   // same expectation (the pane is thin)
+    CHECK(seOn < 0.3 * seOff);                                    // and the noise is far lower with the same number of samples (measured: about 0.16)
+    // the light seen straight through the pane by the camera is still counted, with the same value
+    Ray up{Vec3(0.1f, 0.5f, 0.0f), Vec3(0, 1, 0)};
+    meanAndSe(off, up, 100000, mOff, seOff); meanAndSe(on, up, 100000, mOn, seOn);
+    CHECK(mOff > 0.5);
+    CHECK(std::fabs(mOn - mOff) < 4 * std::sqrt(seOn * seOn + seOff * seOff) + 1e-3);
+    // an opaque object in the way still blocks the shadow ray
+    Scene blocked = on;
+    blocked.materials.push_back(diffuseMat({0.5f, 0.5f, 0.5f}));
+    for (int k = 0; k < 2; k++) {
+        Triangle t = k == 0 ? makeTri({-30, 1.5f, -30}, {-30, 1.5f, 30}, {30, 1.5f, -30}) : makeTri({30, 1.5f, 30}, {30, 1.5f, -30}, {-30, 1.5f, 30});
+        t.material = 2; blocked.tris.push_back(t);
+    }
+    blocked.buildBvh();
+    meanAndSe(blocked, down, 20000, mOn, seOn);
+    CHECK(mOn < 1e-6);                                            // a sheet between the glass and the light: the floor is dark
+}
+
+TEST(a_shadow_ray_through_a_glass_slab_is_dimmed_by_the_fresnel_loss_of_both_faces_at_any_angle) {
+    // slab only (no floor, no light needed): the transmittance of a straight ray is (1 - F)^2, F = reflectance of one face at the ray's angle.
+    // Beyond about 42 degrees a face seen "from inside" would be totally reflecting: the straight ray must not be treated that way.
+    Scene sc = floorGlassLight();
+    sc.tris.erase(sc.tris.begin(), sc.tris.begin() + 2);                // remove the floor, keep the two faces of the pane
+    sc.buildBvh();
+    for (double deg : {0.0, 30.0, 60.0, 75.0}) {
+        double a = deg * 3.14159265358979 / 180;
+        Vec3 d((float)std::sin(a), (float)std::cos(a), 0);              // from below the pane, going up at `deg` from the normal
+        bool crossed = false;
+        Vec3 T = shadowThroughGlass(sc, Vec3(0, 0.2f, 0), d, 5.0f, crossed);
+        double F = fresnelDielectric((float)std::cos(a), 1.5f);
+        CHECK(crossed);
+        CHECK_NEAR(T.x, (1 - F) * (1 - F), 1e-4);
+        CHECK(std::fabs(T.x - T.y) < 1e-6 && std::fabs(T.x - T.z) < 1e-6);   // white glass: no tint
+    }
+    bool crossedNothing = false;                                        // the flag is only ever set, never cleared
+    Vec3 clear = shadowThroughGlass(sc, Vec3(0, 1.5f, 0), Vec3(0, 1, 0), 5.0f, crossedNothing);   // above the pane: nothing in the way
+    CHECK(clear.x == 1.0f && clear.y == 1.0f && clear.z == 1.0f && !crossedNothing);
+}
+
+TEST(noise_switches_are_off_by_default) {
+    Scene sc;
+    CHECK(sc.clampIndirect == 0.0f && sc.glossyFloor == 0.0f && !sc.glassShadows);
+    RenderParams p;
+    CHECK(p.clampIndirect == 0.0f && p.glossyFloor == 0.0f && !p.glassShadows);
+}
+
 int main() {
     for (auto& c : tests()) {
         int before = g_failed;

@@ -10,6 +10,7 @@ struct GuiOptions {
     Display display;           // initial exposure / gamma
     std::string note;
     std::string screenshot;    // if set: save the whole window as PNG after the first render finished, then exit
+    float hoverX = -1, hoverY = -1;   // with screenshot: put the (virtual) mouse here before taking it, so that a tooltip shows (for checking the explanations)
     std::string selfTest;      // if set: scripted run (render, click the Render button with new settings, change the exposure, check), PNGs named PREFIX_1/2/3.png
 };
 

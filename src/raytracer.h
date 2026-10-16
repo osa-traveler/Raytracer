@@ -332,6 +332,10 @@ struct CameraInfo {
 struct Scene {
     std::vector<Material> materials;
     std::vector<Texture> textures;        // decoded images that materials refer to by index
+    // Ways to trade a little accuracy for less noise in Path mode (all off by default: the earlier images are reproduced bit for bit).
+    float clampIndirect = 0.0f;           // > 0: every contribution of a path with two or more scatterings is scaled down so that its largest component is at most this (0 = off)
+    float glossyFloor = 0.0f;             // > 0: after a diffuse / glossy bounce, glossy surfaces get at least this roughness (blurs what indirect light sees; 0 = off)
+    bool glassShadows = false;            // true: shadow rays pass through glass (tinted, Fresnel-reduced) instead of being blocked; light that reaches a surface through glass by BSDF sampling alone is then not counted (the shadow ray stands for it)
     bool useNormalMaps = true;            // false: ignore normal maps (baseColor / metallicRoughness textures are unaffected)
     bool useTextures = true;              // false: ignore textures and use the material factors only (all earlier images)
     std::vector<Triangle> tris;
@@ -1285,6 +1289,13 @@ struct SpecularAlbedoLut {
     }
 };
 
+// Scales a contribution down so that its largest component is at most `limit` (the colour is kept). limit <= 0: no change.
+inline Vec3 clampContribution(const Vec3& c, float limit) {
+    if (limit <= 0.0f) return c;
+    float m = std::max(c.x, std::max(c.y, c.z));
+    return m > limit ? c * (limit / m) : c;
+}
+
 struct BsdfSample {
     Vec3 wi;               // sampled direction (local frame)
     Vec3 weight;           // f * cos / pdf: what the path throughput is multiplied by
@@ -1325,7 +1336,7 @@ struct PbrBsdf {
 
     static float luminance(const Vec3& c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
 
-    static PbrBsdf make(const Material& m, bool multiScatter = true) {
+    static PbrBsdf make(const Material& m, bool multiScatter = true, float minRoughness = 0.0f) {
         PbrBsdf b;
         float metallic = std::min(1.0f, std::max(0.0f, m.metallic));
         float r = (m.ior - 1.0f) / (m.ior + 1.0f);
@@ -1334,7 +1345,7 @@ struct PbrBsdf {
         b.f90 = b.dielF90 * (1.0f - metallic) + metallic;
         b.diffuseColor = m.base * (1.0f - metallic);
         b.f0 = mix(Vec3(b.dielF0, b.dielF0, b.dielF0), m.base, metallic);
-        float rough = std::min(1.0f, std::max(0.0f, m.roughness));
+        float rough = std::min(1.0f, std::max(0.0f, std::max(m.roughness, minRoughness)));   // minRoughness: Scene::glossyFloor after a diffuse / glossy bounce
         b.rough = rough;
         b.alpha = rough * rough;
         b.specDelta = b.alpha < 1e-3f;
@@ -1429,6 +1440,34 @@ struct PbrBsdf {
     }
 };
 
+// A shadow ray that may pass through glass (Scene::glassShadows). Returns the transmittance along the ray from `o` in direction `d`
+// for `dist` metres: 0 when something that is not glass is in the way, otherwise the product over the glass surfaces crossed of
+// base colour * transmission * (1 - Fresnel reflectance). Each surface counts once, the way a refracted path would; the sideways
+// shift a pane gives the ray is ignored, so this is right for thin flat glass (windows) and only an approximation for a ball.
+// `crossed` is set when any glass was crossed.
+inline Vec3 shadowThroughGlass(const Scene& sc, Vec3 o, const Vec3& d, float dist, bool& crossed) {
+    Vec3 T(1, 1, 1);
+    float remaining = dist;
+    for (int i = 0; i < 8; i++) {
+        Hit h;
+        if (!sc.intersect(Ray{o, d}, remaining, h)) return T;
+        Material mtex;
+        const Material& m = materialAt(sc, h, mtex);
+        if (m.transmission <= 0.0f) return Vec3(0, 0, 0);
+        // Every face is treated as one entered from air at the angle the straight shadow ray has. For the face a ray leaves through the
+        // transmittance is the same by symmetry (and using the inside-the-glass formula with the outside angle would call a ray beyond
+        // 42 degrees totally reflected, which a straight ray that really passes the pane is not).
+        float cosI = std::min(1.0f, std::fabs(dot(d, h.ng)));
+        float F = fresnelDielectric(cosI, m.ior);
+        T = T * m.base * (m.transmission * (1.0f - F));
+        crossed = true;
+        o = h.p + d * (EPS * 10);
+        remaining -= h.t + EPS * 10;
+        if (remaining <= 0) return T;
+    }
+    return Vec3(0, 0, 0);                                         // too many layers: call it blocked
+}
+
 // Direct light at x for the PBR model: like sampleDirectLight, with the BSDF in place of albedo / pi.
 //     f(wo, wi) * cos(theta at x) * Le / pdfLight * (MIS weight)
 inline Vec3 sampleDirectLightPbr(const Scene& sc, const Vec3& x, const Vec3& N, const Vec3& Ng, const Frame& fr, const Vec3& woLocal,
@@ -1445,8 +1484,16 @@ inline Vec3 sampleDirectLightPbr(const Scene& sc, const Vec3& x, const Vec3& N, 
     Vec3 f = bsdf.eval(woLocal, wiLocal);
     if (f.x + f.y + f.z <= 0) return Vec3(0, 0, 0);
     tlStats.shadowRays++;
-    if (sc.occluded(Ray{x + Ng * (EPS * 10), wi}, dist - EPS * 10)) return Vec3(0, 0, 0);
     float pdfLight = lightPdfSolidAngle(a, dist2, cosL);
+    if (sc.glassShadows) {
+        bool viaGlass = false;
+        Vec3 vis = shadowThroughGlass(sc, x + Ng * (EPS * 10), wi, dist - EPS * 10, viaGlass);
+        if (vis.x + vis.y + vis.z <= 0) return Vec3(0, 0, 0);
+        // light seen through glass is not produced by BSDF sampling in this mode (the path tracer skips it), so no MIS weight here
+        float weight = (mis && !viaGlass) ? powerHeuristic(pdfLight, bsdf.pdf(woLocal, wiLocal)) : 1.0f;
+        return f * (cosX * a.radiance / pdfLight * weight) * vis;
+    }
+    if (sc.occluded(Ray{x + Ng * (EPS * 10), wi}, dist - EPS * 10)) return Vec3(0, 0, 0);
     float weight = mis ? powerHeuristic(pdfLight, bsdf.pdf(woLocal, wiLocal)) : 1.0f;
     return f * (cosX * a.radiance / pdfLight * weight);
 }
@@ -1459,22 +1506,36 @@ inline Vec3 sampleDirectLightPbr(const Scene& sc, const Vec3& x, const Vec3& N, 
 //  - delta events (mirror, glass) cannot be found by light sampling, so no light sampling is done there, and an emitter
 //    reached right after one counts with weight 1 (the MIS branch for delta lobes). Light that reaches a diffuse point through
 //    glass is therefore found by BSDF sampling only (a caustic, noisy), because light sampling treats glass as opaque.
+//
+// Noise-for-accuracy switches (Scene::clampIndirect, glossyFloor, glassShadows; all off by default):
+//  - clampIndirect: a contribution with two or more scatterings before the light (light sampling at the second or later vertex, an
+//    emitter reached by the third or later ray) is scaled so that its largest component is at most the limit. Direct light and a
+//    mirror or glossy highlight seen straight from the camera are never clamped.
+//  - glossyFloor: once the path has had a non-delta (diffuse / glossy) bounce, surfaces get at least this roughness, so a nearly
+//    mirror-like surface seen only by indirect light spreads its reflection (probability up, value per hit down).
+//  - glassShadows: light sampling sends the shadow ray through glass (shadowThroughGlass). The emitter reached by BSDF sampling
+//    after a refraction that followed a diffuse / glossy vertex is then not counted (that vertex's shadow ray covers it); a light
+//    seen by the camera itself through glass, and reflections off glass, still count.
 inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
     Vec3 L(0, 0, 0), throughput(1, 1, 1);
     const bool hasLight = sc.area.valid;
     float prevPdf = 0;
     bool prevDelta = false;
+    bool scattered = false;         // a non-delta (diffuse / glossy) bounce has happened on this path
+    bool refractedSince = false;    // a refraction happened since the last non-delta vertex
+    auto add = [&](const Vec3& c, bool indirect) { L += indirect ? clampContribution(c, sc.clampIndirect) : c; };
     for (int bounce = 0;; bounce++) {
         Hit h;
         bool hit = sc.intersect(ray, INF, h);
         if (hasLight) {
             float tl = intersectAreaLight(sc.area, ray);
             if (tl > 0 && (!hit || tl < h.t)) {
-                if (!sc.nee || bounce == 0 || prevDelta) L += throughput * sc.area.radiance;
+                if (sc.glassShadows && sc.nee && prevDelta && refractedSince && scattered) return L;   // counted by the shadow ray through the glass
+                if (!sc.nee || bounce == 0 || prevDelta) add(throughput * sc.area.radiance, bounce >= 2);
                 else if (sc.mis) {
                     float cosL = dot(sc.area.normal, ray.d * -1.0f);
                     float w = powerHeuristic(prevPdf, lightPdfSolidAngle(sc.area, tl * tl, cosL));
-                    L += throughput * (sc.area.radiance * w);
+                    add(throughput * (sc.area.radiance * w), bounce >= 2);
                 }
                 return L;
             }
@@ -1511,14 +1572,15 @@ inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
                 if (!refractDirection(ray.d, N, eta, newDir)) return L;   // cannot happen: F = 1 then
                 newOrigin = h.p - Ng * (EPS * 10);
                 throughput = throughput * m.base * (eta * eta);
+                refractedSince = true;
             }
             prevDelta = true;
             prevPdf = 0;
         } else {
-            PbrBsdf bsdf = PbrBsdf::make(m, sc.multiScatter);
+            PbrBsdf bsdf = PbrBsdf::make(m, sc.multiScatter, scattered ? sc.glossyFloor : 0.0f);
             Frame fr(N);
             Vec3 wo = fr.toLocal(V);
-            if (sc.nee && hasLight) L += throughput * sampleDirectLightPbr(sc, h.p, N, Ng, fr, wo, bsdf, smp, sc.mis);
+            if (sc.nee && hasLight) add(throughput * sampleDirectLightPbr(sc, h.p, N, Ng, fr, wo, bsdf, smp, sc.mis), bounce >= 1);
             float uLobe = smp.next1D(), u1 = smp.next1D(), u2 = smp.next1D();
             BsdfSample bs = bsdf.sample(wo, uLobe, u1, u2);
             if (!bs.valid) return L;
@@ -1528,6 +1590,7 @@ inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
             throughput = throughput * bs.weight;
             prevDelta = bs.delta;
             prevPdf = bs.pdf;
+            if (!bs.delta) { scattered = true; refractedSince = false; }
         }
         if (sc.russianRoulette && bounce >= sc.rrStartDepth) {
             float p = std::min(0.95f, std::max(0.05f, std::max(throughput.x, std::max(throughput.y, throughput.z))));
@@ -1560,17 +1623,18 @@ inline Vec3 pathTraceLambert(const Scene& sc, Ray ray, Sampler& smp) {
     Vec3 L(0, 0, 0), throughput(1, 1, 1);
     const bool hasLight = sc.area.valid;
     float prevBsdfPdf = 0;                              // density (solid angle) with which the current ray was chosen
+    auto add = [&](const Vec3& c, bool indirect) { L += indirect ? clampContribution(c, sc.clampIndirect) : c; };   // Scene::clampIndirect, as in pathTracePbr
     for (int bounce = 0;; bounce++) {
         Hit h;
         bool hit = sc.intersect(ray, INF, h);
         if (hasLight) {
             float tl = intersectAreaLight(sc.area, ray);
             if (tl > 0 && (!hit || tl < h.t)) {                                                   // the emitter is opaque
-                if (!sc.nee || bounce == 0) L += throughput * sc.area.radiance;
+                if (!sc.nee || bounce == 0) add(throughput * sc.area.radiance, bounce >= 2);
                 else if (sc.mis) {
                     float cosL = dot(sc.area.normal, ray.d * -1.0f);
                     float w = powerHeuristic(prevBsdfPdf, lightPdfSolidAngle(sc.area, tl * tl, cosL));
-                    L += throughput * (sc.area.radiance * w);
+                    add(throughput * (sc.area.radiance * w), bounce >= 2);
                 }
                 return L;
             }
@@ -1586,7 +1650,7 @@ inline Vec3 pathTraceLambert(const Scene& sc, Ray ray, Sampler& smp) {
         Vec3 N = front ? h.n : -h.n;
         float c = dot(N, Ng);
         if (c < 0.01f) N = normalize(N + Ng * (0.01f - c));
-        if (sc.nee && hasLight) L += throughput * sampleDirectLight(sc, h.p, N, Ng, m.base, smp, sc.mis);
+        if (sc.nee && hasLight) add(throughput * sampleDirectLight(sc, h.p, N, Ng, m.base, smp, sc.mis), bounce >= 1);
         throughput = throughput * m.base;               // metallic / transmission are ignored: everything is Lambertian
         if (sc.russianRoulette && bounce >= sc.rrStartDepth) {
             float p = std::min(0.95f, std::max(0.05f, std::max(throughput.x, std::max(throughput.y, throughput.z))));

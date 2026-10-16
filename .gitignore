@@ -61,3 +61,6 @@ Scene/Test/Beetle_Room*.glb
 
 # normal-map convention check: generated glb / arrays / probe binary (run.sh regenerates them)
 experiments/2026-10-17_normal-map-convention/out/
+
+# beetle views: the per-view glbs (the camera is replaced in a copy of Beetle_Room_rear_tex.glb; make_views.py regenerates them)
+experiments/2026-10-17_beetle-views/out/

@@ -33,6 +33,9 @@ struct RenderParams {
     bool orderedTraversal = true;             // BVH: nearer child first
     bool anyHitShadows = true;                // Path: shadow rays stop at the first hit
     bool legacyNormals = false;               // true = M0 behaviour at silhouettes (see Scene::legacyNormals)
+    float clampIndirect = 0.0f;               // Path: clamp for the radiance of paths with 2+ scatterings (0 = off, see Scene::clampIndirect)
+    float glossyFloor = 0.0f;                 // Path: minimum roughness of glossy surfaces after a diffuse / glossy bounce (0 = off)
+    bool glassShadows = false;                // Path: shadow rays pass through glass (see Scene::glassShadows)
     bool normalMaps = true;                   // false = ignore glTF normalTexture (the other textures stay)
     bool textures = true;                     // false = material factors only, ignore baseColor / metallicRoughness textures
     bool cullBackfaces = false;               // true = the back of doubleSided = false materials is invisible (see Scene::cullBackfaces)
@@ -133,6 +136,9 @@ private:
         scene_->cullBackfaces = params_.cullBackfaces;
         scene_->useTextures = params_.textures;
         scene_->useNormalMaps = params_.normalMaps;
+        scene_->clampIndirect = params_.clampIndirect;
+        scene_->glossyFloor = params_.glossyFloor;
+        scene_->glassShadows = params_.glassShadows;
         scene_->bsdfModel = params_.bsdf;
         scene_->envUniform = params_.envUniform;
         scene_->multiScatter = params_.multiScatter;
