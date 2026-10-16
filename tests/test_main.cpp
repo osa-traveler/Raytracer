@@ -1537,6 +1537,208 @@ TEST(pbr_render_is_deterministic_and_independent_of_threads) {
     CHECK(sameFilm(a, b));
 }
 
+// ---- back-face culling (glTF doubleSided = false), Scene::cullBackfaces
+
+// A one-sided triangle in the plane z = `z` whose front (counter-clockwise) faces +z, with the given material.
+static void addFlatTriangle(Scene& sc, float z, int material) {
+    Triangle t;
+    t.p0 = Vec3(-1, -1, z); t.p1 = Vec3(1, -1, z); t.p2 = Vec3(0, 1, z);
+    t.n0 = t.n1 = t.n2 = Vec3(0, 0, 1);
+    t.material = material;
+    sc.tris.push_back(t);
+}
+
+TEST(backface_culling_hides_only_the_back_of_one_sided_materials) {
+    Material oneSided; oneSided.doubleSided = false;
+    Material twoSided; twoSided.doubleSided = true;
+    const Ray front{Vec3(0, 0, 5), Vec3(0, 0, -1)}, back{Vec3(0, 0, -5), Vec3(0, 0, 1)};
+    for (int mode = 0; mode < 4; mode++) {            // none, median, SAH unordered, SAH ordered (and any-hit off in the last)
+        for (int cull = 0; cull < 2; cull++) {
+            for (int sided = 0; sided < 2; sided++) {
+                Scene sc;
+                sc.materials = {sided ? twoSided : oneSided};
+                addFlatTriangle(sc, 0.0f, 0);
+                sc.setAccel(mode == 0 ? Accel::None : mode == 1 ? Accel::Median : Accel::Sah);
+                sc.orderedTraversal = mode == 3;
+                sc.anyHitShadows = mode != 3;
+                sc.cullBackfaces = cull != 0;
+                Hit h;
+                const bool backVisible = !cull || sided;   // the back of a one-sided triangle disappears only with culling on
+                CHECK(sc.intersect(front, INF, h));        // the front is always seen
+                CHECK(sc.occluded(front, INF));
+                CHECK(sc.intersect(back, INF, h) == backVisible);
+                CHECK(sc.occluded(back, INF) == backVisible);
+            }
+        }
+    }
+}
+
+TEST(backface_culling_lets_a_camera_outside_see_through_the_wall) {
+    // A one-sided wall at z = 0 (front towards +z, the "room") and a two-sided object at z = 2 inside the room.
+    Material wall; wall.doubleSided = false;
+    Material obj; obj.doubleSided = true;
+    Scene sc;
+    sc.materials = {wall, obj};
+    addFlatTriangle(sc, 0.0f, 0);
+    addFlatTriangle(sc, 2.0f, 1);
+    sc.setAccel(Accel::Sah);
+    const Ray outside{Vec3(0, 0, -5), Vec3(0, 0, 1)}, inside{Vec3(0, 0, 5), Vec3(0, 0, -1)};
+    Hit h;
+    sc.cullBackfaces = false;
+    CHECK(sc.intersect(outside, INF, h) && h.material == 0 && std::fabs(h.t - 5.0f) < 1e-4f);   // the wall blocks the view
+    sc.cullBackfaces = true;
+    CHECK(sc.intersect(outside, INF, h) && h.material == 1 && std::fabs(h.t - 7.0f) < 1e-4f);   // the wall is gone: the object is seen
+    CHECK(!sc.occluded(Ray{Vec3(0, 0, -5), Vec3(0, 0, 1)}, 6.0f));                                 // and it casts no shadow from outside
+    CHECK(sc.intersect(inside, INF, h) && h.material == 1);                                      // from inside the object comes first
+    CHECK(sc.intersect(Ray{Vec3(0, 0, 1), Vec3(0, 0, -1)}, INF, h) && h.material == 0);          // the wall's front is still solid
+}
+
+TEST(loader_reads_double_sided_and_the_default_changes_no_image) {
+    Scene cornell = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");      // no doubleSided in the file: glTF default = false
+    for (const Material& m : cornell.materials) CHECK(!m.doubleSided);
+    Scene room = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");   // Blender wrote doubleSided = true
+    for (const Material& m : room.materials) CHECK(m.doubleSided);
+    CHECK(!cornell.cullBackfaces && !room.cullBackfaces);                                 // off by default: the old images stay the same
+    // with culling on but every material double sided, the picture is bit for bit the same
+    applyDefaultLighting(room); configureLight(room, LightMode::Area, 0);
+    room.integrator = Integrator::Path; room.bsdfModel = BsdfModel::Pbr; room.maxDepth = 4;
+    Camera cam = makeCamera(room);
+    RenderSettings rs; rs.spp = 1; rs.jitter = true; rs.seed = 5; rs.threads = 2;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT);
+    Stats st;
+    renderFrame(room, cam, a, rs, nullptr, nullptr, st);
+    room.cullBackfaces = true;
+    renderFrame(room, cam, b, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(a, b));
+}
+
+// ---- textures (M8, step 1): PNG decoder, bilinear sampling, glTF texture loading, materialAt()
+
+static float srgbToLinear(int v) { float c = v / 255.0f; return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+
+// Scene/Test/TextureTest.glb comes from tools/make_texture_test.py, which writes its PNGs with all five scanline filters and
+// zlib level 9 (fixed and dynamic Huffman blocks), so decoding the embedded images covers the inflate and unfilter code.
+TEST(png_decoder_reproduces_every_pixel_of_zlib_compressed_filtered_pngs) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
+    CHECK(sc.textures.size() == 3);
+    if (sc.textures.size() != 3) return;
+    const Texture &chk = sc.textures[0], &mr = sc.textures[1], &pat = sc.textures[2];
+    CHECK(chk.w == 16 && chk.h == 16 && mr.w == 16 && mr.h == 16 && pat.w == 128 && pat.h == 128);
+    int bad = 0;
+    for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 16; x++) {
+            const uint8_t* a = &chk.rgb[((size_t)y * 16 + x) * 3];
+            bool red = ((x / 4) + (y / 4)) % 2 == 0;
+            bad += !(red ? (a[0] == 230 && a[1] == 40 && a[2] == 40) : (a[0] == 240 && a[1] == 240 && a[2] == 240));
+            const uint8_t* b = &mr.rgb[((size_t)y * 16 + x) * 3];
+            bad += !(y < 8 ? (b[0] == 0 && b[1] == 64 && b[2] == 255) : (b[0] == 0 && b[1] == 255 && b[2] == 0));
+        }
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++) {
+            const uint8_t* c = &pat.rgb[((size_t)y * 128 + x) * 3];
+            bad += !(c[0] == ((3 * x + 5 * y) & 255) && c[1] == ((x * x + y) & 255) && c[2] == ((x ^ y) & 255));
+        }
+    CHECK(bad == 0);
+}
+
+TEST(png_decoder_reads_the_renderers_own_uncompressed_png_and_rejects_garbage) {
+    const int w = 7, h = 5;
+    std::vector<uint8_t> rgb(w * h * 3);
+    for (size_t i = 0; i < rgb.size(); i++) rgb[i] = (uint8_t)(i * 37 + 11);
+    const std::string path = "texture_test_roundtrip.png";
+    CHECK(writePNGRgb(path, w, h, rgb));
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    std::vector<uint8_t> bytes(1 << 16);
+    size_t n = f ? std::fread(bytes.data(), 1, bytes.size(), f) : 0;
+    if (f) std::fclose(f);
+    std::remove(path.c_str());
+    png::Image im = png::decode(bytes.data(), n);          // stored (uncompressed) deflate blocks
+    CHECK(im.w == w && im.h == h && im.rgb == rgb);
+    bool threw = false;
+    try { png::decode(bytes.data(), 5); } catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { png::decode(bytes.data(), n / 2); } catch (const std::runtime_error&) { threw = true; }   // cut in the middle
+    CHECK(threw);
+}
+
+TEST(texture_sampling_is_bilinear_repeating_and_decodes_srgb_before_blending) {
+    Texture t; t.w = 2; t.h = 2;
+    t.rgb = {0, 0, 0,   255, 255, 255,      // row 0 (top): black, white
+             255, 0, 0,   0, 0, 255};       // row 1: red, blue
+    // texel centres are at (0.25 | 0.75, 0.25 | 0.75)
+    Vec3 c = t.sample<false>(0.75f, 0.25f); CHECK_NEAR(c.x, 1.0, 1e-6); CHECK_NEAR(c.y, 1.0, 1e-6); CHECK_NEAR(c.z, 1.0, 1e-6);
+    c = t.sample<false>(0.25f, 0.75f);      CHECK_NEAR(c.x, 1.0, 1e-6); CHECK_NEAR(c.y, 0.0, 1e-6); CHECK_NEAR(c.z, 0.0, 1e-6);
+    c = t.sample<false>(0.5f, 0.25f);       CHECK_NEAR(c.x, 0.5, 1e-6); CHECK_NEAR(c.y, 0.5, 1e-6);       // halfway between black and white
+    c = t.sample<false>(0.5f, 0.5f);        CHECK_NEAR(c.x, 0.5, 1e-6); CHECK_NEAR(c.y, 0.25, 1e-6); CHECK_NEAR(c.z, 0.5, 1e-6);   // all four: blue channel (0 + 1 + 0 + 1) / 4
+    Vec3 a = t.sample<false>(0.3f, 0.6f), b = t.sample<false>(1.3f, -0.4f);                                   // repeat: shifted by whole turns
+    CHECK_NEAR(a.x, b.x, 1e-5); CHECK_NEAR(a.y, b.y, 1e-5); CHECK_NEAR(a.z, b.z, 1e-5);
+    // sRGB: the blend of black and white texels is half *linear* light (not the sRGB value of 0.5)
+    c = t.sample<true>(0.5f, 0.25f);        CHECK_NEAR(c.x, 0.5, 1e-5);
+    c = t.sample<true>(0.75f, 0.25f);       CHECK_NEAR(c.x, 1.0, 1e-5);
+    Texture g; g.w = 1; g.h = 1; g.rgb = {188, 128, 10};
+    c = g.sample<true>(0.4f, 0.4f);         CHECK_NEAR(c.x, srgbToLinear(188), 1e-5); CHECK_NEAR(c.y, srgbToLinear(128), 1e-5); CHECK_NEAR(c.z, srgbToLinear(10), 1e-5);
+    CHECK_NEAR(c.y, 0.2158, 5e-4);                                                                              // the textbook value for 128
+}
+
+TEST(textured_materials_follow_the_uv_of_the_hit_and_can_be_switched_off) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
+    CHECK(sc.materials.size() == 2 && sc.materials[0].baseColorTex >= 0 && sc.materials[0].metalRoughTex >= 0 && sc.materials[1].baseColorTex >= 0);
+    // straight down onto the floor: uv = ((x + 4) / 4, (z + 4) / 4); a 4-pixel cell is 1 m
+    auto at = [&](float x, float z, Material& tmp) {
+        Hit h;
+        CHECK(sc.intersect(Ray{Vec3(x, 3, z), Vec3(0, -1, 0)}, INF, h));
+        CHECK_NEAR(h.tu, (x + 4) / 4, 1e-4); CHECK_NEAR(h.tv, (z + 4) / 4, 1e-4);                           // the vertices' uv, interpolated
+        return &materialAt(sc, h, tmp);
+    };
+    Material t1, t2, t3, t4;
+    const Material* m = at(-3.5f, -3.5f, t1);                      // cell (0,0): red; image row 2 (v = 0.125): the metal half
+    CHECK_NEAR(m->base.x, srgbToLinear(230), 1e-4); CHECK_NEAR(m->base.y, srgbToLinear(40), 1e-4); CHECK_NEAR(m->base.z, srgbToLinear(40), 1e-4);
+    CHECK_NEAR(m->metallic, 1.0, 1e-4); CHECK_NEAR(m->roughness, 64 / 255.0, 1e-4);
+    m = at(-2.5f, -3.5f, t2);                                      // next cell along u: white
+    CHECK_NEAR(m->base.x, srgbToLinear(240), 1e-4); CHECK_NEAR(m->base.z, srgbToLinear(240), 1e-4);
+    m = at(1.5f, -1.5f, t3);                                       // u = 1.375 -> 0.375 (repeat), v = 0.625: bottom half, rough dielectric
+    CHECK_NEAR(m->metallic, 0.0, 1e-4); CHECK_NEAR(m->roughness, 1.0, 1e-4);
+    CHECK_NEAR(m->base.x, srgbToLinear(240), 1e-4);                // pixel 6 -> cell 1, row 10 -> cell 2: (1 + 2) is odd -> white
+    sc.useTextures = false;                                        // factors only: the file's numbers, nothing sampled
+    m = at(-3.5f, -3.5f, t4);
+    CHECK(m == &sc.materials[0]);                                  // the scene's own material, no copy
+    CHECK_NEAR(m->base.x, 1.0, 1e-6); CHECK_NEAR(m->metallic, 1.0, 1e-6); CHECK_NEAR(m->roughness, 1.0, 1e-6);
+}
+
+TEST(textures_change_nothing_for_scenes_without_textures_and_reach_the_path_tracer) {
+    // a scene without textures renders identically with textures on or off
+    Scene room = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    CHECK(room.textures.empty());
+    applyDefaultLighting(room); configureLight(room, LightMode::Area, 0);
+    room.integrator = Integrator::Path; room.bsdfModel = BsdfModel::Pbr; room.maxDepth = 3;
+    Camera cam = makeCamera(room);
+    RenderSettings rs; rs.spp = 1; rs.jitter = true; rs.seed = 9; rs.threads = 2;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT);
+    Stats st;
+    room.useTextures = true;  renderFrame(room, cam, a, rs, nullptr, nullptr, st);
+    room.useTextures = false; renderFrame(room, cam, b, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(a, b));
+    // with textures the checker floor is red / white in the picture, and switching them off removes the colour
+    Scene tt = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
+    applyDefaultLighting(tt); configureLight(tt, LightMode::Area, 0);
+    tt.integrator = Integrator::Path; tt.bsdfModel = BsdfModel::Pbr; tt.maxDepth = 3;
+    Camera cam2 = makeCamera(tt);
+    Film c(WIDTH, HEIGHT), d(WIDTH, HEIGHT);
+    tt.useTextures = true;  renderFrame(tt, cam2, c, rs, nullptr, nullptr, st);
+    tt.useTextures = false; renderFrame(tt, cam2, d, rs, nullptr, nullptr, st);
+    CHECK(!sameFilm(c, d));
+    // at the bottom of the picture (the near floor) the textured render has clearly more red than blue; the untextured one is grey
+    double redTex = 0, blueTex = 0, redPlain = 0, bluePlain = 0;
+    for (int y = HEIGHT - 20; y < HEIGHT; y++)
+        for (int x = 0; x < WIDTH; x++) {
+            Vec3 pc = c.pixel(x, y), pd = d.pixel(x, y);
+            redTex += pc.x; blueTex += pc.z; redPlain += pd.x; bluePlain += pd.z;
+        }
+    CHECK(redTex > 1.15 * blueTex);
+    CHECK(std::fabs(redPlain - bluePlain) < 0.05 * redPlain);
+}
+
 int main() {
     for (auto& c : tests()) {
         int before = g_failed;

@@ -57,4 +57,4 @@ experiments/2026-10-16_m7-cycles/*.exr
 
 # Purchased model (CGTrader), too large / licensed
 Assets/bettle/
-Scene/Test/Beetle_Room.glb
+Scene/Test/Beetle_Room*.glb

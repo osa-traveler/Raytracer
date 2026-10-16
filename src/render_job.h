@@ -33,6 +33,8 @@ struct RenderParams {
     bool orderedTraversal = true;             // BVH: nearer child first
     bool anyHitShadows = true;                // Path: shadow rays stop at the first hit
     bool legacyNormals = false;               // true = M0 behaviour at silhouettes (see Scene::legacyNormals)
+    bool textures = true;                     // false = material factors only, ignore baseColor / metallicRoughness textures
+    bool cullBackfaces = false;               // true = the back of doubleSided = false materials is invisible (see Scene::cullBackfaces)
 };
 
 class RenderJob {
@@ -127,6 +129,8 @@ private:
         scene_->maxDepth = params_.maxDepth;
         configureLight(*scene_, params_.lightMode, params_.lightSize);
         scene_->legacyNormals = params_.legacyNormals;
+        scene_->cullBackfaces = params_.cullBackfaces;
+        scene_->useTextures = params_.textures;
         scene_->bsdfModel = params_.bsdf;
         scene_->envUniform = params_.envUniform;
         scene_->multiScatter = params_.multiScatter;

@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "png_decode.h"
+
 static constexpr int WIDTH = 640;
 static constexpr int HEIGHT = 480;
 static constexpr int MAX_DEPTH = 6;
@@ -184,6 +186,29 @@ struct JsonParser {
 };
 
 // ---------------------------------------------------------------- scene
+// An 8-bit RGB image used as a texture. Lookups follow glTF: (u, v) = (0, 0) is the top-left corner of the image, v grows
+// downwards, the wrap mode is repeat and the filter is bilinear (the sampler object in the file is not read).
+struct Texture {
+    int w = 0, h = 0;
+    std::vector<uint8_t> rgb;
+    // Bilinear lookup, 0..1 per channel. Srgb: decode each texel from sRGB to linear *before* blending (colour textures);
+    // otherwise the numbers are used as they are (roughness / metalness data).
+    template <bool Srgb>
+    Vec3 sample(float u, float v) const {
+        static const struct Lut { float v[256]; Lut() { for (int i = 0; i < 256; i++) { float c = i / 255.0f; v[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); } } } lut;
+        float x = u * w - 0.5f, y = v * h - 0.5f;
+        float fx = std::floor(x), fy = std::floor(y);
+        float tx = x - fx, ty = y - fy;
+        auto wrap = [](int i, int n) { i %= n; return i < 0 ? i + n : i; };
+        int x0 = wrap((int)fx, w), x1 = wrap((int)fx + 1, w), y0 = wrap((int)fy, h), y1 = wrap((int)fy + 1, h);
+        auto texel = [&](int xi, int yi) {
+            const uint8_t* p = &rgb[((size_t)yi * w + xi) * 3];
+            return Srgb ? Vec3(lut.v[p[0]], lut.v[p[1]], lut.v[p[2]]) : Vec3(p[0] / 255.0f, p[1] / 255.0f, p[2] / 255.0f);
+        };
+        return mix(mix(texel(x0, y0), texel(x1, y0), tx), mix(texel(x0, y1), texel(x1, y1), tx), ty);
+    }
+};
+
 struct Material {
     Vec3 base{1, 1, 1};
     float metallic = 1.0f;     // glTF default
@@ -191,12 +216,16 @@ struct Material {
     float transmission = 0.0f;
     float ior = 1.5f;          // KHR_materials_ior (glass refraction, and the dielectric reflectance at normal incidence)
     float specular = 1.0f;     // KHR_materials_specular specularFactor: scales the dielectric reflectance (0 = no specular highlight)
+    int baseColorTex = -1;     // index into Scene::textures (glTF baseColorTexture, multiplied with `base`), -1 = none
+    int metalRoughTex = -1;    // glTF metallicRoughnessTexture: G = roughness, B = metalness (multiplied with the factors), -1 = none
+    bool doubleSided = true;   // glTF doubleSided (the loader reads it, the default of the file format is false). Only used with Scene::cullBackfaces
     std::string name;
 };
 
 struct Triangle {
     Vec3 p0, p1, p2;
     Vec3 n0, n1, n2;
+    float uv[6] = {0, 0, 0, 0, 0, 0};   // TEXCOORD_0 of the three vertices (u0, v0, u1, v1, u2, v2), glTF convention
     int material;
 };
 
@@ -207,6 +236,7 @@ struct Hit {
     Vec3 p, n;          // n: interpolated (smooth) shading normal
     Vec3 ng;            // geometric normal of the triangle, on the same side as the vertex normals
     int material = -1;
+    float tu = 0, tv = 0;   // interpolated texture coordinates
 };
 
 struct PointLight { Vec3 pos; Vec3 color; };
@@ -295,6 +325,8 @@ struct CameraInfo {
 
 struct Scene {
     std::vector<Material> materials;
+    std::vector<Texture> textures;        // decoded images that materials refer to by index
+    bool useTextures = true;              // false: ignore textures and use the material factors only (all earlier images)
     std::vector<Triangle> tris;
     std::vector<BvhNode> nodes;
     std::vector<int> triOrder;
@@ -313,6 +345,11 @@ struct Scene {
     // away from the viewer at a silhouette is clamped (see trace). true: the M0 behaviour, which decides by the
     // interpolated normal and flips it, sending rays into the inside of spheres at their outline.
     bool legacyNormals = false;
+    // false (default): every triangle is double sided, whatever the material says (all earlier images). true: a triangle of
+    // a material with doubleSided = false is invisible to every ray that hits its back side (glTF: front = counter-clockwise
+    // when seen from the front). Blender writes doubleSided = false for materials with "Backface Culling" on. Rays that
+    // hit the front of the same triangle still see it, so a wall can be seen from inside the room but not from outside.
+    bool cullBackfaces = false;
     int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting); number of bounces in Path mode
     Integrator integrator = Integrator::Classic;
     BsdfModel bsdfModel = BsdfModel::Lambert;   // legacy default: the earlier experiments are reproduced bit for bit; the app asks for Pbr
@@ -481,6 +518,14 @@ struct Scene {
         Vec3 g = normalize(cross(bt->p1 - bt->p0, bt->p2 - bt->p0));
         hit.ng = dot(g, bt->n0 + bt->n1 + bt->n2) < 0 ? -g : g;   // follow the vertex normals, not the winding order
         hit.material = bt->material;
+        float w0 = 1 - bu - bv;
+        hit.tu = bt->uv[0] * w0 + bt->uv[2] * bu + bt->uv[4] * bv;
+        hit.tv = bt->uv[1] * w0 + bt->uv[3] * bu + bt->uv[5] * bv;
+    }
+
+    // True if the ray hit the back side of a one-sided triangle and cullBackfaces is on (the hit must then be ignored).
+    bool culled(const Triangle& tr, const Ray& r) const {
+        return cullBackfaces && !materials[tr.material].doubleSided && dot(cross(tr.p1 - tr.p0, tr.p2 - tr.p0), r.d) > 0;
     }
 
     // Nearest hit with EPS < t < tmax. Which triangles are looked at depends on `accel` (None / BVH, optionally ordered).
@@ -495,7 +540,7 @@ struct Scene {
             for (const Triangle& tr : tris) {
                 float t, u, v;
                 tlStats.triTests++;
-                if (!intersectTriangle(r, tr, t, u, v)) continue;
+                if (!intersectTriangle(r, tr, t, u, v) || culled(tr, r)) continue;
                 if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
             }
         } else if (!orderedTraversal) {
@@ -511,7 +556,7 @@ struct Scene {
                     const Triangle& tr = tris[triOrder[k]];
                     float t, u, v;
                     tlStats.triTests++;
-                    if (!intersectTriangle(r, tr, t, u, v)) continue;
+                    if (!intersectTriangle(r, tr, t, u, v) || culled(tr, r)) continue;
                     if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
                 }
             }
@@ -543,7 +588,7 @@ struct Scene {
                     const Triangle& tr = tris[triOrder[k]];
                     float t, u, v;
                     tlStats.triTests++;
-                    if (!intersectTriangle(r, tr, t, u, v)) continue;
+                    if (!intersectTriangle(r, tr, t, u, v) || culled(tr, r)) continue;
                     if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
                 }
             }
@@ -561,7 +606,7 @@ struct Scene {
             for (const Triangle& tr : tris) {
                 float t, u, v;
                 tlStats.triTests++;
-                if (intersectTriangle(r, tr, t, u, v) && t > EPS && t < tmax) return true;
+                if (intersectTriangle(r, tr, t, u, v) && t > EPS && t < tmax && !culled(tr, r)) return true;
             }
             return false;
         }
@@ -577,12 +622,32 @@ struct Scene {
                 const Triangle& tr = tris[triOrder[k]];
                 float t, u, v;
                 tlStats.triTests++;
-                if (intersectTriangle(r, tr, t, u, v) && t > EPS && t < tmax) return true;
+                if (intersectTriangle(r, tr, t, u, v) && t > EPS && t < tmax && !culled(tr, r)) return true;
             }
         }
         return false;
     }
 };
+
+// The material at a hit: the file's factors, multiplied by the textures at the hit's (u, v) when the material has any and
+// textures are on. Returns the scene's own material when nothing is textured (no copy); otherwise fills `tmp` (everything
+// but the name) and returns it. Every shading routine goes through this, so the textures reach Classic and Path alike.
+inline const Material& materialAt(const Scene& sc, const Hit& h, Material& tmp) {
+    const Material& m = sc.materials[(size_t)h.material];
+    if (!sc.useTextures || (m.baseColorTex < 0 && m.metalRoughTex < 0)) return m;
+    tmp.base = m.base; tmp.metallic = m.metallic; tmp.roughness = m.roughness; tmp.transmission = m.transmission;
+    tmp.ior = m.ior; tmp.specular = m.specular; tmp.doubleSided = m.doubleSided;
+    if (m.baseColorTex >= 0) {
+        Vec3 c = sc.textures[m.baseColorTex].sample<true>(h.tu, h.tv);
+        tmp.base = Vec3(m.base.x * c.x, m.base.y * c.y, m.base.z * c.z);
+    }
+    if (m.metalRoughTex >= 0) {
+        Vec3 c = sc.textures[m.metalRoughTex].sample<false>(h.tu, h.tv);
+        tmp.roughness = m.roughness * c.y;
+        tmp.metallic = m.metallic * c.z;
+    }
+    return tmp;
+}
 
 // ---------------------------------------------------------------- glb loader
 struct Glb {
@@ -654,6 +719,11 @@ inline void addMesh(Scene& sc, const Glb& g, int meshIdx, const Mat4& world) {
         if (pr.has("indices")) idx = readIndices(g, pr["indices"].i());
         else for (size_t i = 0; i < nv; i++) idx.push_back((uint32_t)i);
 
+        std::vector<float> uvs;   // TEXCOORD_0 (float accessors only, what Blender writes)
+        if (pr["attributes"].has("TEXCOORD_0")) {
+            int ua = pr["attributes"]["TEXCOORD_0"].i();
+            if (g.json["accessors"][ua]["componentType"].i() == 5126) uvs = readFloats(g, ua, 2);
+        }
         std::vector<Vec3> wp(nv), wn(nv);
         for (size_t i = 0; i < nv; i++) {
             wp[i] = world.point({pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]});
@@ -668,6 +738,8 @@ inline void addMesh(Scene& sc, const Glb& g, int meshIdx, const Mat4& world) {
             if (nrm.empty()) t.n0 = t.n1 = t.n2 = normalize(cross(t.p1 - t.p0, t.p2 - t.p0));
             else { t.n0 = wn[idx[i]]; t.n1 = wn[idx[i + 1]]; t.n2 = wn[idx[i + 2]]; }
             t.material = mat;
+            if (!uvs.empty())
+                for (int k = 0; k < 3; k++) { t.uv[2 * k] = uvs[idx[i + k] * 2]; t.uv[2 * k + 1] = uvs[idx[i + k] * 2 + 1]; }
             sc.tris.push_back(t);
         }
     }
@@ -714,17 +786,40 @@ inline Scene loadScene(const std::string& path) {
     Glb g = readGlb(path);
     Scene sc;
     const Json& mats = g.json["materials"];
+    std::vector<int> imgMap(g.json["images"].size(), -1);     // glTF image index -> Scene::textures (decoded once, on first use; textures that share an image share it)
+    auto textureIndex = [&](const Json& info) -> int {
+        if (!info.has("index")) return -1;
+        int ti = info["index"].i();
+        if (ti < 0 || ti >= (int)g.json["textures"].size()) return -1;
+        int src = g.json["textures"][ti]["source"].i(-1);
+        if (src < 0 || src >= (int)imgMap.size()) return -1;
+        if (imgMap[src] < 0) {
+            const Json& img = g.json["images"][src];
+            if (!img.has("bufferView")) throw std::runtime_error("texture image must be embedded in the glb (no external file or data URI)");
+            const Json& bv = g.json["bufferViews"][img["bufferView"].i()];
+            size_t off = (size_t)bv["byteOffset"].f(0), len = (size_t)bv["byteLength"].f(0);
+            if (off + len > g.bin.size()) throw std::runtime_error("texture image outside the binary chunk");
+            png::Image im = png::decode(&g.bin[off], len);
+            Texture t; t.w = im.w; t.h = im.h; t.rgb = std::move(im.rgb);
+            imgMap[src] = (int)sc.textures.size();
+            sc.textures.push_back(std::move(t));
+        }
+        return imgMap[src];
+    };
     for (size_t i = 0; i < mats.size(); i++) {
         Material m;
         m.name = mats[i]["name"].str;
         const Json& pbr = mats[i]["pbrMetallicRoughness"];
         if (pbr.has("baseColorFactor"))
             m.base = {pbr["baseColorFactor"][0].f(), pbr["baseColorFactor"][1].f(), pbr["baseColorFactor"][2].f()};
+        if (pbr.has("baseColorTexture") && pbr["baseColorTexture"]["texCoord"].i(0) == 0) m.baseColorTex = textureIndex(pbr["baseColorTexture"]);
+        if (pbr.has("metallicRoughnessTexture") && pbr["metallicRoughnessTexture"]["texCoord"].i(0) == 0) m.metalRoughTex = textureIndex(pbr["metallicRoughnessTexture"]);
         if (pbr.has("metallicFactor")) m.metallic = pbr["metallicFactor"].f();
         if (pbr.has("roughnessFactor")) m.roughness = pbr["roughnessFactor"].f();
         const Json& ext = mats[i]["extensions"];
         if (ext.has("KHR_materials_transmission")) m.transmission = ext["KHR_materials_transmission"]["transmissionFactor"].f(0);
         if (ext.has("KHR_materials_ior")) m.ior = ext["KHR_materials_ior"]["ior"].f(1.5f);
+        m.doubleSided = mats[i].has("doubleSided") ? mats[i]["doubleSided"].b : false;   // glTF default
         if (ext.has("KHR_materials_specular")) m.specular = ext["KHR_materials_specular"]["specularFactor"].f(1.0f);
         sc.materials.push_back(m);
     }
@@ -829,7 +924,8 @@ inline Vec3 shadowTransmittance(const Scene& sc, const Vec3& p, const Vec3& n, c
     for (int i = 0; i < 8; i++) {
         Hit h;
         if (!sc.intersect(r, remaining, h)) return T;
-        const Material& m = sc.materials[h.material];
+        Material mtex;
+        const Material& m = materialAt(sc, h, mtex);
         if (m.transmission <= 0.0f) return Vec3(0, 0, 0);
         T = T * m.base * (0.9f * m.transmission);
         r.o = h.p + r.d * (EPS * 10);
@@ -851,7 +947,8 @@ inline Vec3 background(const Ray& r) {
 inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
     Hit h;
     if (!sc.intersect(ray, INF, h)) return background(ray);
-    const Material& m = sc.materials[h.material];
+    Material mtex;
+        const Material& m = materialAt(sc, h, mtex);
 
     Vec3 V = -ray.d;
     bool front;
@@ -1317,7 +1414,8 @@ inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
         }
         if (bounce >= sc.maxDepth) return L;
 
-        const Material& m = sc.materials[h.material];
+        Material mtex;
+        const Material& m = materialAt(sc, h, mtex);
         Vec3 V = ray.d * -1.0f;
         bool front = dot(ray.d, h.ng) < 0;
         Vec3 Ng = front ? h.ng : -h.ng;                // the side the ray came from
@@ -1407,7 +1505,8 @@ inline Vec3 pathTraceLambert(const Scene& sc, Ray ray, Sampler& smp) {
         if (!hit) { if (sc.envScale > 0) L += throughput * background(ray) * sc.envScale; return L; }
         if (bounce >= sc.maxDepth) return L;
 
-        const Material& m = sc.materials[h.material];
+        Material mtex;
+        const Material& m = materialAt(sc, h, mtex);
         bool front = dot(ray.d, h.ng) < 0;
         Vec3 Ng = front ? h.ng : -h.ng;                // the side the ray came from
         Vec3 N = front ? h.n : -h.n;

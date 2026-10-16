@@ -8,8 +8,8 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 
 ## 機能
 
-- GLB(glTF 2.0)ローダ(JSON パーサも自前実装。外部ライブラリは SDL2 のみ)
-  - メッシュ、ノード変換(TRS / matrix / 子ノード)、PBR 材質(baseColor / metallic / roughness)、`KHR_materials_transmission`、カメラ
+- GLB(glTF 2.0)ローダ(JSON パーサ・PNG デコーダも自前実装。外部ライブラリは SDL2 のみ)
+  - メッシュ、UV、ノード変換(TRS / matrix / 子ノード)、PBR 材質(baseColor / metallic / roughness)、**テクスチャ(baseColor、metallicRoughness。埋め込み PNG、`--no-textures` で無効化)**、`KHR_materials_transmission`、カメラ
 - BVH による高速化(中央値分割 / SAH、近い子から先に走査、Path の影レイは any-hit。約30万三角形のシーンを、1フレーム十数 ms で描画。BVH なし(全三角形)との比較、スレッド数との関係も測定)
 - レイトレーシング
   - 拡散反射 + Blinn-Phong、**面光源(矩形をランダムにサンプリング、ソフトシャドウ)**または点光源、影(ガラスは薄い影)
@@ -22,7 +22,7 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 - モンテカルロ法: 再現性のある乱数(PCG32、ピクセルごとに独立。スレッド数によらず結果が同一)、1ピクセルのサンプル数(`--spp`)、ピクセル内のランダムな位置(ジッタ = アンチエイリアス)
 - 線形の浮動小数の film と、表示変換(露出・ガンマ)の分離。画像は PNG・PFM(線形)で保存、画像どうしの差(RMSE)を測れる
 - マルチスレッドで走査線ごとに描画し、描画の進行をウィンドウに表示
-- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(1959項目)、再現できる実験(`experiments/`)
+- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(2100項目)、再現できる実験(`experiments/`)
 
 ## ビルドと実行
 
@@ -55,6 +55,7 @@ cmake --build build-release
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --jitter --spp 16 --seed 1 --out out
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --light area --light-size 0.5 --spp 64 --out out   # 小さい面光源(影がくっきり)
 ./build/raytrace Scene/Test/Room_2Spheres.glb --headless --light point --legacy-normals --out out   # M0 の基準を再現(輪郭の扱いを旧方式に)
+./build-release/raytrace Scene/Test/Beetle_Room.glb --headless --integrator path --spp 64 --cull-backfaces --out out   # 壁の裏側(部屋の外)から見ても、壁が消える(glTF の doubleSided = false を守る)
 ./build/raytrace --rmse out.pfm other.pfm
 ./build/raytrace_tests              # テスト
 ./build/raytrace --gui-selftest /tmp/gui   # 操作パネルの自動操作テスト(画面なしなら SDL_VIDEODRIVER=dummy を付ける)
@@ -67,11 +68,12 @@ cmake --build build-release
 
 ## シーン・アセット
 
+- `Scene/Test/TextureTest.glb`: テクスチャ読み込みの最小のテスト(市松模様の床 + metallicRoughness、128x128 の模様の壁。`tools/make_texture_test.py` で生成。すべてのフィルタ・動的 Huffman の PNG を含む)
 - `Scene/Test/MaterialRow.glb`: 材質の球列(`tools/make_material_row.py` で生成。金・赤いプラスチック、roughness 0.05〜1.0、ガラス球 IOR 1.2 / 1.5 / 2.4、鏡)。PBR の確認用
 - `Scene/Test/Cornell.glb`: Cornell Box(`tools/make_cornell.py` で生成。赤壁・緑壁・白い箱2個・天井の面光源)。パストレーシング(`--integrator path`)の検証用
 - `Scene/Test/Room_2Spheres.glb`: 基準シーン(部屋、金属球、ガラス球。球は部屋の中心に対称)
 - `Scene/Test/Untitled.glb`: Blender で作成した検証用シーン(部屋、金属球、青い拡散球、ガラス球)
-- `Scene/Test/Beetle_Room.glb`(**Git 対象外**): 部屋 + 購入モデル(CGTrader の空冷ビートル、約47万三角形)+ ガラス球 2 個。Blender から `tools/export_beetle_room.py` で書き出す。レンダラがテクスチャを読めないため、ビートルは単色の材質に置き換えてある(値は見た目からの近似)。描画例: `docs/screenshots/2026-10-16_beetle-room-256spp-path-pbr.png`(256 spp、113 s、`experiments/2026-10-16_beetle/`)。修正済みの Blender ファイルは `Assets/bettle/Bettle_Blender.blend`(Git 対象外)。購入モデル(CGTrader「VW Classic Bettle」、Royalty Free License)の描画画像は公開できる見込み(ユーザーが確認)。モデルのファイル自体は再配布しない
+- `Scene/Test/Beetle_Room.glb`(**Git 対象外**): 部屋 + 購入モデル(CGTrader の空冷ビートル、約47万三角形)+ ガラス球 2 個。Blender から `tools/export_beetle_room.py` で書き出す。このファイルは、ビートルを単色の材質に置き換えたもの(`--no-textures` と同じ見た目の近似)。テクスチャ付きは `Scene/Test/Beetle_Room_rear_tex.glb`(`tools/export_beetle_room_textured.py`。UDIM を 1 枚のアトラスにまとめて書き出す)。描画例: `docs/screenshots/2026-10-16_beetle-room-256spp-path-pbr.png`(256 spp、113 s、`experiments/2026-10-16_beetle/`)。修正済みの Blender ファイルは `Assets/bettle/Bettle_Blender.blend`(Git 対象外)。購入モデル(CGTrader「VW Classic Bettle」、Royalty Free License)の描画画像は公開できる見込み(ユーザーが確認)。モデルのファイル自体は再配布しない
 - `Assets/VW_Beetle_1967.glb`: Blender で手作りした1967年式フォルクスワーゲン・ビートル風のモデル(約31万三角形。簡易的な形状で、正確な再現ではありません)。
   レンダリングが重いため、現在のシーンには含めていません。
 

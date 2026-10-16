@@ -45,6 +45,8 @@ inline void writeRunConfig(const std::string& path, const RenderParams& p, const
     std::fprintf(f, "  \"environment_scale\": %g,\n  \"environment_uniform\": %g,\n", scene.envScale, scene.envUniform);
     std::fprintf(f, "  \"max_depth\": %d,\n", scene.maxDepth);
     std::fprintf(f, "  \"silhouette_normals\": \"%s\",\n", scene.legacyNormals ? "legacy (M0: flip the interpolated normal)" : "geometric facing + clamp");
+    std::fprintf(f, "  \"backface_culling\": %s,\n", scene.cullBackfaces ? "true" : "false");
+    std::fprintf(f, "  \"textures\": {\"used\": %s, \"images\": %d},\n", scene.useTextures ? "true" : "false", (int)scene.textures.size());
     std::fprintf(f, "  \"threads\": %u,\n", p.threads);
     std::fprintf(f, "  \"display\": {\"exposure\": %g, \"gamma\": %g, \"tone_mapping\": \"none (clamp)\"},\n", disp.exposure, disp.gamma);
     const bool areaUsed = scene.lightMode == LightMode::Area && scene.area.valid;

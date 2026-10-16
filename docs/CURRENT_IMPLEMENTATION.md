@@ -25,7 +25,7 @@
 | 並列化 | `std::thread`、ハードウェアスレッド数。走査線(行)単位で `atomic` カウンタから取得 |
 | 画面 | **操作パネル付きのウィンドウ**(左に画像、右に Dear ImGui のパネル)。描画は別スレッドで、完了した行から画像に出る(プログレッシブ表示では、パスごとに画像全体が更新される)。画像はズーム・パンできる。パネル: シーン(GLB のパス + 一覧)、サンプル数、ジッタ、シード、スレッド数、最大反射回数、光源(点 / 面)と面光源の大きさ、**Render** / **Cancel**、露出・ガンマ(再描画なしで即反映)、状態(時間・レイ数・Mrays/s)、保存(PNG + PFM + JSON)。起動時に、1回描画する |
 | 出力 | 画面なし(`--headless`)の描画の結果は、`output.ppm`(8bit)。`--out PREFIX` を付けると `PREFIX.png`(表示用)、`PREFIX.pfm`(線形の浮動小数)、`PREFIX.json`(設定・時間・カウンタ)を保存 |
-| 起動 | `./build/raytrace [GLBファイル] [オプション]`。引数なしは `Scene/Test/Untitled.glb`(リポジトリのルートで実行)。パネルの初期値、または画面なし描画の設定: `--spp N`(1ピクセルのサンプル数、既定1)、`--jitter`(ピクセル内のランダムな位置に置く。既定はオフ = ピクセル中心)、`--seed N`(乱数のシード、既定1)、`--threads N`、`--max-depth N`(最大反射回数、既定6)、`--light point|area`(既定 area)、`--light-size METRES`(面光源の一辺。0 = GLB のとおり)、`--legacy-normals`(輪郭の扱いを M0 の旧方式にする。M0 の基準画像と過去の実験を、ビット単位で再現する)、`--exposure X`、`--gamma X`、`--accel none|median|sah`、`--no-ordered`、`--no-any-hit`、`--bsdf lambert|pbr`(Path の材質、既定 pbr)、`--no-multiscatter`、`--env-uniform X`、`--integrator classic|path`(既定 classic)、`--no-nee`(Path の NEE をオフ)、`--mis` / `--no-mis`(Path の MIS、既定オン)、`--rr`(Path の Russian Roulette、既定オフ)、`--env X`(Path の空の光、既定 0)、`--progressive` / `--no-progressive`(段階描画。ウィンドウの既定はオン)。画面なし: `--headless`、`--out PREFIX`、`--repeat N`(N回描画して時間を記録)、`--note 文字列`。ウィンドウ: `--screenshot FILE.png`(最初の描画の後にウィンドウ全体を保存して終了)、`--gui-selftest PREFIX`(Render ボタンと露出スライダーの自動操作テスト)。`./build/raytrace --rmse A.pfm B.pfm` は2つの線形画像の差(RMSE)を表示 |
+| 起動 | `./build/raytrace [GLBファイル] [オプション]`。引数なしは `Scene/Test/Untitled.glb`(リポジトリのルートで実行)。パネルの初期値、または画面なし描画の設定: `--spp N`(1ピクセルのサンプル数、既定1)、`--jitter`(ピクセル内のランダムな位置に置く。既定はオフ = ピクセル中心)、`--seed N`(乱数のシード、既定1)、`--threads N`、`--max-depth N`(最大反射回数、既定6)、`--light point|area`(既定 area)、`--light-size METRES`(面光源の一辺。0 = GLB のとおり)、`--legacy-normals`(輪郭の扱いを M0 の旧方式にする。M0 の基準画像と過去の実験を、ビット単位で再現する)、`--cull-backfaces`(材質の `doubleSided = false` を守り、その裏面を全レイから消す。既定オフ)、`--exposure X`、`--gamma X`、`--accel none|median|sah`、`--no-ordered`、`--no-any-hit`、`--bsdf lambert|pbr`(Path の材質、既定 pbr)、`--no-multiscatter`、`--env-uniform X`、`--integrator classic|path`(既定 classic)、`--no-nee`(Path の NEE をオフ)、`--mis` / `--no-mis`(Path の MIS、既定オン)、`--rr`(Path の Russian Roulette、既定オフ)、`--env X`(Path の空の光、既定 0)、`--progressive` / `--no-progressive`(段階描画。ウィンドウの既定はオン)。画面なし: `--headless`、`--out PREFIX`、`--repeat N`(N回描画して時間を記録)、`--note 文字列`。ウィンドウ: `--screenshot FILE.png`(最初の描画の後にウィンドウ全体を保存して終了)、`--gui-selftest PREFIX`(Render ボタンと露出スライダーの自動操作テスト)。`./build/raytrace --rmse A.pfm B.pfm` は2つの線形画像の差(RMSE)を表示 |
 | 操作 | Esc(文字入力中を除く)またはウィンドウを閉じて終了。**画像の拡大縮小**: スクロール(トラックパッドの2本指)またはマウスホイールでカーソル位置を中心にズーム(10%〜6400%)、ドラッグで移動、ダブルクリックで全体表示。下のボタン Fit / 100% / 200% / 400% / 800%。100% 以上はピクセルをくっきり表示(補間なし)。カーソル下のピクセルの座標、線形の RGB 値、サンプル数を表示する(表示だけの機能で、描画結果は変わらない) |
 | ビルド | CMake 3.24 以上。**描画・計測は `build-release/`(`-DCMAKE_BUILD_TYPE=Release`、`-O3 -DNDEBUG`)で行う**。`build/` はデバッグ用の Debug ビルド(最適化なし。Release の約11倍遅い)。ビルド種類を指定しないと Release になる。**初回の設定時に、ネットワークから Dear ImGui を取得する**(固定バージョン + ハッシュ検証。[THIRD_PARTY.md](THIRD_PARTY.md)) |
 
@@ -50,16 +50,17 @@ GLB を読む → 三角形(ワールド座標)に展開 → BVH 構築
 |---|---|
 | GLB(バイナリ)の JSON + BIN チャンク | 外部ファイルや data URI のバッファ |
 | 三角形メッシュ(mode 4)、インデックス 8/16/32bit | 三角形以外のプリミティブ(読み飛ばす) |
-| 頂点位置・法線(法線がなければ面法線) | テクスチャ、UV、頂点カラー、法線マップ |
+| 頂点位置・法線(法線がなければ面法線)、**`TEXCOORD_0`(UV、float のみ)** | 頂点カラー、2組目以降の UV、normalized 整数の UV |
 | ノードの変換(translation / rotation / scale / matrix)、子ノード | スキニング、アニメーション |
-| 材質: `baseColorFactor`、`metallicFactor`、`roughnessFactor`、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_specular`(`specularFactor` だけ)の係数。Path の PBR が全部使う。Classic が使うのは、transmission と roughness / metallic の一部で、屈折率は1.5固定 | クリアコート、発光、テクスチャ、`specularColorFactor`、volume(減衰・厚み) |
+| 材質: `baseColorFactor`、`metallicFactor`、`roughnessFactor`、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_specular`(`specularFactor` だけ)の係数。Path の PBR が全部使う。Classic が使うのは、transmission と roughness / metallic の一部で、屈折率は1.5固定。**テクスチャ(M8 の1歩目): `baseColorTexture`(sRGB。`baseColorFactor` に掛ける)と `metallicRoughnessTexture`(G = roughness、B = metalness。`roughnessFactor` / `metallicFactor` に掛ける)。埋め込みの PNG だけ**。Classic も Path も使う | クリアコート、発光、**法線マップ、occlusion、emissive テクスチャ**、`transmissionTexture` などの他のテクスチャ、JPEG・外部ファイル・data URI の画像、サンプラー(ラップ・フィルタ。常に repeat + 双線形)、`KHR_texture_transform`、`texCoord` が 0 以外、ミップマップ(縮小時のちらつきの対策なし)、`specularColorFactor`、volume(減衰・厚み) |
 | カメラ: シーン内の最初の透視カメラ | 正射影カメラ、複数カメラの切り替え |
 | 面光源(矩形): ノードの extras(`rt_light_type` = "rect"、`rt_size_x`、`rt_size_y`、`rt_radiance`)と、ノードの変換。描画に使う(M1) | ライト(`KHR_lights_punctual`)。Blender のエリアライト自体は GLB に出力されないので、Blender のカスタムプロパティで補っている |
 
-- **Blender から書き出すときの注意**: 面光源のノードを glb に出すには、エクスポータの `export_lights=True`(ライトを含める。「未対応の AREA」という警告は出るが、ノードと extras は書かれる)が必要。オフだと光源がなく、画面は**真っ黒**になる(2026-10-16 に実際に起きた)。`export_extras=True` と `export_cameras=True` も使う。**テクスチャは読まない**ので、テクスチャ付きの材質は、係数だけの材質に置き換えて書き出す(例: `tools/export_beetle_room.py`)。
+- **テクスチャ**(2026-10-17、M8 の1歩目): `src/png_decode.h` の自前 PNG デコーダ(inflate: 非圧縮・固定・動的 Huffman、フィルタ 5 種、8/16 ビット、グレー / RGB / RGBA / パレット。**インターレースは未対応**。Adler-32 と CRC は検証しない。出力は 8 ビット RGB)で、glb に埋め込んだ PNG を読む。画像は、同じものを共有するテクスチャで 1 回だけ復号する。メモリは 8 ビット RGB(4096x6144 で約 75 MB)。`Texture::sample` は双線形で、v は下向き(glTF)、ラップは repeat、sRGB は**混ぜる前に**線形へ変換する。UV は三角形ごとに持ち(`Triangle::uv`)、ヒットで補間する(`Hit::tu/tv`)。すべての材質の参照は `materialAt()` を通り、テクスチャがなければ scene の材質をそのまま返す(コピーなし)ので、**テクスチャのない glb の画像は変わらない**(Cornell・MaterialRow・Room_2Spheres・Untitled で、修正前のバイナリと PFM がバイト単位で同一)。`--no-textures`(GUI にもチェックボックス)で、係数だけの描画に戻せる。**UDIM は glTF にないので、Blender のエクスポートで 1 枚のアトラスにまとめる**(`tools/export_beetle_room_textured.py`)。
+- **Blender から書き出すときの注意**: 面光源のノードを glb に出すには、エクスポータの `export_lights=True`(ライトを含める。「未対応の AREA」という警告は出るが、ノードと extras は書かれる)が必要。オフだと光源がなく、画面は**真っ黒**になる(2026-10-16 に実際に起きた)。`export_extras=True` と `export_cameras=True` も使う。テクスチャは `baseColor` と `metallicRoughness` だけ読む(UDIM は不可。`tools/export_beetle_room_textured.py` はアトラスにまとめる)。テクスチャを使わず係数だけにしたいときは、材質を単色に置き換えて書き出す(`tools/export_beetle_room.py`)。
 - 座標系は glTF(Y 上、右手系)。Blender(Z 上)からの変換はエクスポータが行う。
 - 法線はワールド座標へ変換して使う(逆転置行列の余因子で計算)。
-- `doubleSided` は参照せず、すべての面を両面として扱う。
+- `doubleSided`(材質): 既定では**参照せず、すべての面を両面として扱う**(これまでのすべての画像)。**`--cull-backfaces`**(GUI にもチェックボックス)をオンにすると、`doubleSided = false` の材質の三角形は、**裏側から当たるレイ(カメラ、反射、屈折、影のすべて)には存在しない**ものとして扱う。表は、これまでどおり当たる。表裏は glTF の規約どおり、**頂点の巻き順(反時計回りが表)**で決める(法線の向きではない)。ローダは `doubleSided` を読み、**ファイルに書かれていなければ glTF の既定の false** とする(Blender のエクスポータは、マテリアルの「Backface Culling」がオンなら false、オフなら true を書く)。使い道: 壁を、部屋の内側からは見えて、外側からは消える面にして、カメラを壁の外に置く(`Scene/Test/Beetle_Room.glb`)。**制約**: ノードの変換が反転(負のスケール)を含むとき、glTF は巻き順を逆にするよう定めているが、**未対応**。Cornell.glb と MaterialRow.glb は `doubleSided` を持たない(= false)ので、**このスイッチをオンにすると画像が変わる**(オフなら変わらない)。
 
 ## 4. カメラ
 
@@ -191,7 +192,7 @@ f = 拡散色 × (1 − Es(μo)) (1 − Es(μi)) / (π (1 − Ē))              
 
 ## 9. 既知の制約・近似
 
-- Classic 方式の光輸送は、直接照明と、鏡面反射・屈折だけ(環境光の定数で間接光を代用)。拡散面どうしの間接光は、Path 方式だけが持つ(上の 8b 章)。Path 方式の材質は、Lambert(M2)または PBR(M7、8c章)。PBR の制約: 粗いガラス(つや消し)は未対応、ガラスの影は完全な影(ガラス越しの光は BSDF サンプリングだけが拾い、コースティクスはざらつく)、ガラスの色(base color)は境界を通るたびに掛かる(体積の減衰ではない)、テクスチャ・発光・クリアコートなしの glTF の一部、空の光は光源サンプリングの対象外。
+- Classic 方式の光輸送は、直接照明と、鏡面反射・屈折だけ(環境光の定数で間接光を代用)。拡散面どうしの間接光は、Path 方式だけが持つ(上の 8b 章)。Path 方式の材質は、Lambert(M2)または PBR(M7、8c章)。PBR の制約: 粗いガラス(つや消し)は未対応、ガラスの影は完全な影(ガラス越しの光は BSDF サンプリングだけが拾い、コースティクスはざらつく)、ガラスの色(base color)は境界を通るたびに掛かる(体積の減衰ではない)、発光・クリアコート・法線マップなしの glTF の一部、空の光は光源サンプリングの対象外。
 - 実験の描画時間のうち、M2・M3・NEE の実験(2026-10-15)の当時の記録は Debug の値。Release で測り直した値は `experiments/2026-10-16_release-timings/`(Debug の約 18〜26 倍速い)。
 - 光源は面光源(矩形)1個のみ。1つの点につき、光源のサンプルは1つ(サンプルを増やす手段は、ピクセルのサンプル数だけ)。光源側と BSDF 側のサンプルを組み合わせる MIS は未実装(M4)。
 - 面光源の明るさの較正は、部屋の中心の1点での平均。距離減衰が入っているので、旧点光源の画像とは、全体が異なる(RMSE 0.27、基準の面光源画像との比較)。
@@ -221,7 +222,7 @@ f = 拡散色 × (1 − Es(μo)) (1 − Es(μi)) / (π (1 − Ē))              
 
 ## 11. テスト
 
-`./build-release/raytrace_tests`(または `ctest --test-dir build-release`)。1959項目、すべて成功(2026-10-16)。
+`./build-release/raytrace_tests`(または `ctest --test-dir build-release`)。2100項目、すべて成功(2026-10-17。テクスチャの 59 項目を追加。前日に追加した裏面の非表示は 82 項目で、わざとバグを入れて検出を確認済み)。テクスチャのテスト: PNG デコーダが、zlib 圧縮・全フィルタの PNG(`TextureTest.glb`)の全ピクセルを再現する、自前の非圧縮 PNG の往復と壊れた入力の拒否、双線形・repeat・sRGB を混ぜる前に線形化、ヒットの UV と `materialAt()` の値(市松と metallicRoughness)、`useTextures = false` で係数に戻る、テクスチャのないシーンの画像が不変、テクスチャが Path の画像に出る。**わざとバグを入れて検出を確認**(6 件): v の反転、roughness と metalness のチャンネルの入れ替え、baseColor を sRGB 変換しない、UV の重みの入れ替え、PNG の平均フィルタの丸め、repeat を clamp に変える(すべて元に戻した)。さらに、実物の Blender 製 4096x4096 PNG 3 枚(BaseColor・Roughness・Metalness)で、5 点ずつ Blender の値と**完全に一致**することを確認した(復号は 1 枚 60〜440 ms)。
 
 - レイと三角形: 当たり(距離・重心座標)、外れ(外側、斜辺や辺のぎりぎり外)、平行、裏から(両面)、辺・頂点上、原点の後ろ(t < 0)。
 - シーンの交差: 最近傍の選択、`tmax` の制限、原点の後ろの無視。

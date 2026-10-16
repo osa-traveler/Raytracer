@@ -4,6 +4,33 @@
 
 ## 2026-10-16
 
+### テクスチャ対応(M8 の1歩目): baseColor と metallicRoughness
+- **きっかけ**: リアから見ると、Blender ではテールライトが赤く、ナンバープレートが白いのに、自作レンダラでは黒かった。調べると、色はテクスチャから来ていた(`Back_Hood_003` = ナンバープレート: 白に赤・濃紺。`Phare` の後ろ側 = テールライト: 赤・オレンジ・暗赤色)。それを、私が単色に置き換えていた(プレートを黒いプラスチック、ライトを透明なガラスにしていた = **置き換えの割り当ての誤りでもあった**)。
+- **実装**:
+  - `src/png_decode.h`: 自前の PNG デコーダ(inflate の 3 種のブロック、フィルタ 5 種、8/16 ビット、グレー・RGB・RGBA・パレット。インターレース未対応。Adler-32・CRC は検証しない)。
+  - ローダ: `TEXCOORD_0`(float)を三角形ごとに持ち(`Triangle::uv`)、ヒットで補間(`Hit::tu/tv`)。材質の `baseColorTexture` と `metallicRoughnessTexture` を読む(埋め込み PNG のみ。同じ画像を共有するテクスチャは 1 回だけ復号)。
+  - `Texture::sample`: 双線形、v は下向き(glTF)、repeat、sRGB は混ぜる前に線形化。`materialAt()`: baseColor = 係数 × テクスチャ、roughness = 係数 × G、metallic = 係数 × B。**全部の材質の参照がここを通る**(Classic も Path も)。テクスチャのない材質は、scene の材質をそのまま返す。
+  - **旧方式を残す**: `--no-textures`(GUI にもチェックボックス。JSON に `textures`)。**テクスチャを持たない glb の画像は、修正前のバイナリと PFM がバイト単位で同一**だった(Cornell・MaterialRow・Room_2Spheres・Untitled)。
+  - `tools/make_texture_test.py` → `Scene/Test/TextureTest.glb`(市松模様の床 + metallicRoughness、128x128 の模様の壁。PNG はすべてのフィルタと動的 Huffman を含む)。
+- **Blender 側(`tools/export_beetle_room_textured.py`)**: glTF に UDIM はない。ビートルの UV は 2x3 タイル(u 0〜2、v 0〜3)なので、各 4096² のタイルを 2048² に縮めて 4096x6144 のアトラス 2 枚(BaseColor、metallicRoughness(G = roughness、B = metalness))にまとめ(`Assets/bettle/textures/atlas/`、再利用)、**書き出しの間だけ UV を (u/2, v/3) にして、材質をアトラスにした**。塗装は、アトラスに黄色を乗算(エクスポータが `baseColorFactor` として認識)。窓ガラスは元のまま。書き出しの後、UV・材質・一時画像は元に戻した。**法線マップは出していない**。
+- **テスト**(2100 項目、すべて成功。**59 項目を追加**): PNG デコーダが、zlib 圧縮・全フィルタの PNG の全ピクセルを再現、自前の非圧縮 PNG の往復と壊れた入力の拒否、双線形・repeat・sRGB を混ぜる前に線形化(128 → 0.2158)、ヒットの UV と `materialAt()`(市松、metallicRoughness、repeat)、`useTextures = false` で係数に戻る、テクスチャのないシーンの画像が不変、テクスチャが Path の画像に出る。**わざとバグを入れて検出を確認**(6 件、すべて元に戻した): v の反転(15 項目が失敗)、roughness と metalness の入れ替え(2)、baseColor の sRGB 変換なし(6)、UV の重みの入れ替え(8)、PNG の平均フィルタの丸め(3)、repeat を clamp に(3)。**テストの誤りが 1 件**: 4 つのテクセルの青成分の平均の期待値を 0.75 と書いていた(正しくは 0.5)。計算で確かめて直した。実物の Blender 製 4096² の PNG 3 枚で、**Blender の値と 5 点ずつ完全に一致**(復号は 1 枚 60〜440 ms)。`--gui-selftest` も終了コード 0。
+- **実験**(`experiments/2026-10-16_beetle/`、`notes.md`): `Beetle_Room_rear_tex.glb`(約 39 MB、材質 10)を、256 spp(最大反射 8、RR あり、`--cull-backfaces`)で描画。読み込み + BVH 1.6 s、描画 **52.2 s**、6.45 億レイ、ピークのメモリ約 425 MB(以前の 113.3 s や 85.9 s とは、カメラが違い、マシンの状態も同じとは限らないので、速度の比較にはならない)。**テールライトの赤、ナンバープレートの白、クロームが出た**。Blender(Cycles、同じカメラ)と、構図・色の傾向が一致。Blender のほうが明るい(空の光とデノイズがある。**較正した比較ではない**)。自作レンダラのほうが、ノイズが多い。
+- **スクリーンショット**: `docs/screenshots/2026-10-17_beetle-room-rear-textured-256spp.png`(レンダラの出力 PNG)。
+- **未実装 / 未確認**: 法線マップ、ミップマップ、JPEG、サンプラー(ラップ・フィルタ)、`KHR_texture_transform`、UDIM(エクスポート側でアトラス化)。アトラスは 2048² に縮めたので、ナンバープレートの文字は 640x480 では読めない。タイルの境界での色のにじみ(双線形のとき、隣のタイルを混ぜる)は、見て確認していない。
+- 注意: コミットはしていない(変更は未コミット)。
+- **次**: 法線マップ(タイヤの溝・グリル)、ミップマップ、HDRI。または Cycles との較正した比較、ガラスのノイズの調査。
+
+### 壁の裏面を消す(Blender で試し、自作レンダラも対応): カメラを部屋の外へ
+- **きっかけ**: カメラを引きたいが、カメラはすでに手前の壁(y = -7)の目の前にあり、下げると壁の外に出る。「裏から見たときは壁を消す(表だけ表示)」ことにした。
+- **Blender 側(先に試した)**: 壁・天井・床の法線が、そろっていなかった(`Wall_Front`、`Wall_Right`、天井が部屋の外向き。`Wall_Back`、`Wall_Left`、床は内向き)。全部を内向きにそろえ、6 枚のマテリアルの Backface Culling をオンにし(EEVEE・ビューポート用。glTF の `doubleSided = false` としても書き出される)、**Cycles は Backface Culling の設定を使わない**(推定。この Blender 5.2 で設定だけの確認はしていない)ので、Geometry の Backfacing で裏面を透明にした。カメラを視線の後ろへ 3 m 下げて(y = -9.7)焦点距離 35 mm にすると、**壁が消えて部屋の中が見えた**(Cycles)。
+- **実装(自作レンダラ)**: `Material::doubleSided`(ローダが glTF の `doubleSided` を読む。ファイルに書かれていなければ glTF の既定の false)、`Scene::cullBackfaces`(**既定オフ**、`--cull-backfaces`、GUI のチェックボックス、JSON の `backface_culling`)。オンのとき、`doubleSided = false` の材質の三角形に、裏(頂点の巻き順で判定)から当たったレイは、**カメラ・反射・屈折・影のどれでも無視**する(`Scene::culled()`。`intersect()` の 3 経路と `occluded()` の 2 経路に入れた)。表からは、これまでどおり当たる。
+- **旧方式を残す**: 既定は、すべての面を両面として扱う(これまでと同じ)。**修正前のバイナリと、修正後の既定の出力の PFM を、バイト単位で比較して同一**だった(Cornell、MaterialRow、Room_2Spheres、Untitled(パス、4 spp、シード 7)と Room_2Spheres の Classic)。注意: Cornell と MaterialRow は、`doubleSided` を持たない(= false)ので、**スイッチをオンにすると画像が変わる**(オフなら変わらない)。
+- **テスト**(2041 項目、すべて成功。**82 項目を追加**): 一方向の三角形の表と裏が、探索 4 方式(全三角形、中央値 BVH、SAH、近い子から + any-hit なし)× 切り替え 2 × 材質 2 で、期待どおり見える・消える(`intersect()` と `occluded()` の両方)、外側のカメラが一方向の壁を抜けて奥の物を見る(影レイも通る)・内側からは壁の表が硬い、ローダが `doubleSided` を読む(Cornell は false、Room_2Spheres は true)、全材質が両面ならオンでもオフでも画像が完全に同じ。**わざとバグを入れて検出を確認**: 表と裏の判定の反転(19 項目が失敗)、影レイが裏面を無視(全三角形の経路と BVH の経路を別々に。それぞれ 4 / 3 項目が失敗)、ローダの既定値を true にする(3 項目が失敗)。すべて元に戻した。`--gui-selftest` も、終了コード 0。
+- **実験**(`experiments/2026-10-16_beetle/`): 部屋の外のカメラ(y = -9.7、35 mm)で、**スイッチなしは真っ黒**(壁が視線を遮り、壁の外には光が当たらない)、**あり**は部屋の中が見える。256 spp(最大反射 8、RR あり): 85.9 s、6.44 億レイ。以前の構図の 113.3 s より速いが、構図が違うので速度の比較にはならない。窓ガラスのノイズは残っている。
+- **スクリーンショット**: `docs/screenshots/2026-10-16_beetle-room-pullback-cull-256spp.png`(レンダラの出力 PNG)。
+- **未対応**: 負のスケールで反転したノードの巻き順(glTF は逆にするよう定めている)。Cycles の Backface Culling が効かないという点の確認。
+- 注意: コミットはしていない(変更は未コミット)。
+
 ### 実モデル(CGTrader の空冷ビートル)を Blender に読み込み、自作レンダラで描く
 - **経緯**: 購入したモデル(`Assets/bettle/` の FBX / OBJ / UDIM テクスチャ)を Blender MCP で読み込み、修正し、Blender で整えたシーン(部屋 + ビートル + ガラス球)を glb にして、自作レンダラ(M7 の PBR パストレーシング)で描いた。レンダラの変更はなし。
 - **Blender 側の作業**(ユーザーの Blender を MCP で操作。レンダラの実装とは別の作業):
