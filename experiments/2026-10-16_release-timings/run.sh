@@ -4,7 +4,7 @@
 # Cornell box, jitter, seed 1, all hardware threads. Run from the repository root; python3 experiments/analyze_timings.py DIR summarises.
 R=${RAYTRACE:-./build-release/raytrace}
 D=experiments/2026-10-16_release-timings
-C="$R Scene/Test/Cornell.glb --headless --jitter --seed 1 --integrator path"
+C="$R Scene/Test/Cornell.glb --headless --jitter --seed 1 --integrator path --bsdf lambert"
 $R Scene/Test/Cornell.glb --headless --jitter --seed 1 --spp 16 --out $D/m2_classic_16spp > /dev/null
 for d in 0 1 2 4 8; do $C --spp 256 --max-depth $d --no-nee --no-mis --out $D/m2_plain_d$d > /dev/null; echo "done m2 d$d"; done
 for n in 1 4 16 64 256; do

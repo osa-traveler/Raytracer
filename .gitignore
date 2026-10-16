@@ -47,3 +47,10 @@ experiments/2026-10-15_m4-nee/*.png
 experiments/2026-10-16_m5-accel/*.png
 experiments/2026-10-16_m5-threads/*.png
 experiments/2026-10-16_release-timings/*.png
+
+# M7 experiments: numbers in results.* / notes.md, figures in docs/screenshots/; run.sh regenerates the images
+experiments/2026-10-16_m7-materials/*.png
+
+# Cycles comparison: numbers in results.* / notes.md, figures in docs/screenshots/; run.sh regenerates the images (needs Blender)
+experiments/2026-10-16_m7-cycles/*.png
+experiments/2026-10-16_m7-cycles/*.exr

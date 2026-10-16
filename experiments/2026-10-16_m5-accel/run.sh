@@ -13,7 +13,7 @@ run() {   # name scene spp repeats mode-args extra-args
 MODES="none:--accel_none_--no-ordered_--no-any-hit median:--accel_median_--no-ordered_--no-any-hit median_ord:--accel_median_--ordered_--no-any-hit sah:--accel_sah_--no-ordered_--no-any-hit sah_ord:--accel_sah_--ordered_--no-any-hit sah_ord_any:--accel_sah_--ordered_--any-hit"
 for m in $MODES; do
   name=${m%%:*}; args=$(echo ${m#*:} | tr '_' ' ')
-  run cornell_$name Scene/Test/Cornell.glb 16 3 "$args" "--integrator path --max-depth 8"
+  run cornell_$name Scene/Test/Cornell.glb 16 3 "$args" "--integrator path --bsdf lambert --max-depth 8"
 done
 for m in $MODES; do
   name=${m%%:*}; args=$(echo ${m#*:} | tr '_' ' ')

@@ -1,0 +1,32 @@
+11:17:11 | INFO: Data are loaded, start creating Blender stuff
+11:17:11 | INFO: Blender create Mesh node floor
+11:17:11 | INFO: Blender create Mesh node wall
+11:17:11 | INFO: Blender create Mesh node gold_r0.05
+11:17:11 | INFO: Blender create Mesh node gold_r0.1
+11:17:11 | INFO: Blender create Mesh node gold_r0.2
+11:17:11 | INFO: Blender create Mesh node gold_r0.35
+11:17:11 | INFO: Blender create Mesh node gold_r0.5
+11:17:11 | INFO: Blender create Mesh node gold_r0.75
+11:17:11 | INFO: Blender create Mesh node gold_r1.0
+11:17:11 | INFO: Blender create Mesh node plastic_r0.05
+11:17:11 | INFO: Blender create Mesh node plastic_r0.1
+11:17:11 | INFO: Blender create Mesh node plastic_r0.2
+11:17:11 | INFO: Blender create Mesh node plastic_r0.35
+11:17:11 | INFO: Blender create Mesh node plastic_r0.5
+11:17:11 | INFO: Blender create Mesh node plastic_r0.75
+11:17:11 | INFO: Blender create Mesh node plastic_r1.0
+11:17:11 | INFO: Blender create Mesh node glass_ior1.2
+11:17:11 | INFO: Blender create Mesh node glass_ior1.5
+11:17:11 | INFO: Blender create Mesh node glass_ior2.4
+11:17:11 | INFO: Blender create Mesh node mirror
+11:17:11 | INFO: Blender create Mesh node grey_mirror
+11:17:12 | INFO: glTF import finished in 0.34s
+/Users/osa/Local/Program/Raytrace/tools/cycles_render.py:28: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  mat = bpy.data.materials.new("LightEmission"); mat.use_nodes = True
+/Users/osa/Local/Program/Raytrace/tools/cycles_render.py:35: DeprecationWarning: 'World.use_nodes' is expected to be removed in Blender 6.0
+  world = bpy.data.worlds.new("Sky"); world.use_nodes = True; scene.world = world
+02:35.027  render           | Saved: 'experiments/2026-10-16_m7-cycles/cycles_1024spp.exr'
+DONE experiments/2026-10-16_m7-cycles/cycles_1024spp
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-15 01:49:19)
+
+Blender quit
