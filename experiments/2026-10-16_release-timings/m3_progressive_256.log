@@ -1,0 +1,8 @@
+Loaded Scene/Test/Cornell.glb: 30 triangles, 3 materials, 29 BVH nodes, camera from file (0 ms)
+  pass: 1 spp  (52.8 ms)
+  pass: 4 spp  (222.2 ms)
+  pass: 16 spp  (853.7 ms)
+  pass: 64 spp  (3387.9 ms)
+  pass: 256 spp  (13531.3 ms)
+render 1/1: 13541.5 ms
+Saved experiments/2026-10-16_release-timings/m3_progressive_256.png / .pfm / .json

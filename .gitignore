@@ -42,3 +42,8 @@ build-release/
 experiments/2026-10-15_m2-cornell/*.png
 experiments/2026-10-15_m3-progressive/*.png
 experiments/2026-10-15_m4-nee/*.png
+
+# M5 / release-timing experiments: the numbers are in results.txt / notes.md, the figures in docs/screenshots/; run.sh regenerates the images
+experiments/2026-10-16_m5-accel/*.png
+experiments/2026-10-16_m5-threads/*.png
+experiments/2026-10-16_release-timings/*.png

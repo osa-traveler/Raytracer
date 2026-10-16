@@ -1,0 +1,92 @@
+[
+ {
+  "name": "M2 classic (Whitted), 16 spp",
+  "debug_ms": 3372.0,
+  "release_ms": 176.6
+ },
+ {
+  "name": "M2 path, no NEE, 0 bounces, 256 spp",
+  "debug_ms": 28331.9,
+  "release_ms": 1454.94
+ },
+ {
+  "name": "M2 path, no NEE, 1 bounces, 256 spp",
+  "debug_ms": 81631.9,
+  "release_ms": 3294.3
+ },
+ {
+  "name": "M2 path, no NEE, 2 bounces, 256 spp",
+  "debug_ms": 103194.4,
+  "release_ms": 4784.2
+ },
+ {
+  "name": "M2 path, no NEE, 4 bounces, 256 spp",
+  "debug_ms": 126937.3,
+  "release_ms": 6929.6
+ },
+ {
+  "name": "M2 path, no NEE, 8 bounces, 256 spp",
+  "debug_ms": 181852.1,
+  "release_ms": 9929.58
+ },
+ {
+  "name": "NEE, 8 bounces, 1 spp",
+  "debug_ms": 1055.3,
+  "release_ms": 52.66
+ },
+ {
+  "name": "no NEE, 8 bounces, 1 spp",
+  "debug_ms": 707.6,
+  "release_ms": 38.94
+ },
+ {
+  "name": "NEE, 8 bounces, 4 spp",
+  "debug_ms": 4282.1,
+  "release_ms": 215.5
+ },
+ {
+  "name": "no NEE, 8 bounces, 4 spp",
+  "debug_ms": 2802.3,
+  "release_ms": 153.87
+ },
+ {
+  "name": "NEE, 8 bounces, 16 spp",
+  "debug_ms": 18263.0,
+  "release_ms": 870.14
+ },
+ {
+  "name": "no NEE, 8 bounces, 16 spp",
+  "debug_ms": 11624.6,
+  "release_ms": 650.74
+ },
+ {
+  "name": "NEE, 8 bounces, 64 spp",
+  "debug_ms": 67766.5,
+  "release_ms": 3447.03
+ },
+ {
+  "name": "no NEE, 8 bounces, 64 spp",
+  "debug_ms": 45368.9,
+  "release_ms": 2586.72
+ },
+ {
+  "name": "NEE, 8 bounces, 256 spp",
+  "debug_ms": 274263.9,
+  "release_ms": 13615.34
+ },
+ {
+  "name": "no NEE, 8 bounces, 256 spp",
+  "debug_ms": 183428.9,
+  "release_ms": 9669.94
+ },
+ {
+  "name": "M3 progressive 256 spp (NEE)",
+  "debug_ms": 286336.9,
+  "release_ms": 13541.54
+ },
+ {
+  "name": "M3 single pass 256 spp (NEE)",
+  "debug_ms": 345626.9,
+  "release_ms": 13499.95
+ }
+]

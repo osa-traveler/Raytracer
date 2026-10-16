@@ -1,0 +1,26 @@
+scene      mode                ms  runs        rays  nodes/ray   tris/ray  build ms vs median    RMSE (ref)
+beetle1    none           80616.8     1      371160        0.0   301716.0       0.0     0.00x 0.000000 none
+beetle1    median            18.2     3      371160       18.6        3.1      69.4     1.00x 0.000000 none
+beetle1    median_ord        14.5     3      371160       17.7        2.9      72.9     1.25x 0.000000 none
+beetle1    sah               14.2     3      371160       14.3        1.3     177.9     1.28x 0.000000 none
+beetle1    sah_ord           12.4     3      371160       13.8        1.2     184.1     1.47x 0.000000 none
+beetle16   median           209.7     3     5938914       18.6        3.1      68.3     1.00x 0.000000 median
+beetle16   median_ord       187.4     3     5938914       17.7        2.9      64.8     1.12x 0.000000 median
+beetle16   sah              158.8     3     5938914       14.3        1.3     185.9     1.32x 0.000000 median
+beetle16   sah_ord          150.2     3     5938914       13.8        1.2     184.6     1.40x 0.000000 median
+cornell    none            1554.8     3    31123016        0.0       30.0       0.0     1.14x 0.000000 none
+cornell    median          1769.3     3    31123016       12.3       18.9       0.0     1.00x 0.000000 none
+cornell    median_ord      1663.1     3    31123016       12.3       18.9       0.0     1.06x 0.000000 none
+cornell    sah             1154.1     3    31123016       15.3        2.9       0.0     1.53x 0.000000 none
+cornell    sah_ord         1118.8     3    31123016       15.1        2.6       0.0     1.58x 0.000000 none
+cornell    sah_ord_any      980.5     3    31123016       14.7        2.4       0.0     1.80x 0.000000 none
+room       none           17990.3     3     3413338        0.0     7948.0       0.0     0.02x 0.000000 none
+room       median           371.9     3     3413338       90.3       20.3       1.3     1.00x 0.000000 none
+room       median_ord       322.2     3     3413338       90.6       20.3       1.4     1.15x 0.000000 none
+room       sah              145.3     3     3413338       28.7        2.3       4.3     2.56x 0.000000 none
+room       sah_ord          133.9     3     3413338       27.8        2.0       4.9     2.78x 0.000000 none
+untitled   none           24607.3     3     3397053        0.0    11916.0       0.0     0.02x 0.000000 none
+untitled   median           406.9     3     3397053      102.2       18.5       2.2     1.00x 0.000000 none
+untitled   median_ord       354.2     3     3397053      102.7       18.5       2.2     1.15x 0.000000 none
+untitled   sah              164.3     3     3397053       34.7        2.4       6.6     2.48x 0.000000 none
+untitled   sah_ord          140.6     3     3397053       33.3        2.2       6.7     2.89x 0.000000 none

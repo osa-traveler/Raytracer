@@ -1,0 +1,21 @@
+render                                            Debug [s]  Release [s]  speed-up
+M2 classic (Whitted), 16 spp                           3.37         0.18     19.1x
+M2 path, no NEE, 0 bounces, 256 spp                   28.33         1.45     19.5x
+M2 path, no NEE, 1 bounces, 256 spp                   81.63         3.29     24.8x
+M2 path, no NEE, 2 bounces, 256 spp                  103.19         4.78     21.6x
+M2 path, no NEE, 4 bounces, 256 spp                  126.94         6.93     18.3x
+M2 path, no NEE, 8 bounces, 256 spp                  181.85         9.93     18.3x
+NEE, 8 bounces, 1 spp                                  1.06         0.05     20.0x
+no NEE, 8 bounces, 1 spp                               0.71         0.04     18.2x
+NEE, 8 bounces, 4 spp                                  4.28         0.22     19.9x
+no NEE, 8 bounces, 4 spp                               2.80         0.15     18.2x
+NEE, 8 bounces, 16 spp                                18.26         0.87     21.0x
+no NEE, 8 bounces, 16 spp                             11.62         0.65     17.9x
+NEE, 8 bounces, 64 spp                                67.77         3.45     19.7x
+no NEE, 8 bounces, 64 spp                             45.37         2.59     17.5x
+NEE, 8 bounces, 256 spp                              274.26        13.62     20.1x
+no NEE, 8 bounces, 256 spp                           183.43         9.67     19.0x
+M3 progressive 256 spp (NEE)                         286.34        13.54     21.1x
+M3 single pass 256 spp (NEE)                         345.63        13.50     25.6x
+
+progressive passes, Release (cumulative): 1 spp 0.05 s, 4 spp 0.22 s, 16 spp 0.85 s, 64 spp 3.39 s, 256 spp 13.53 s
