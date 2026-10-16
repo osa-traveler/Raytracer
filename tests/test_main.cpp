@@ -1056,6 +1056,173 @@ TEST(light_sampling_counts_its_shadow_rays) {
     CHECK(tlStats.shadowRays == 0);
 }
 
+// ---------------------------------------------------------------- M5: acceleration structures
+static Scene randomTriangleScene(int n, uint32_t seed, bool clustered) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> pos(-10, 10), small(-0.6f, 0.6f);
+    std::normal_distribution<float> gauss(0, 0.8f);
+    Scene sc;
+    sc.materials = {diffuseMat({1, 1, 1})};
+    std::vector<Vec3> centres;
+    for (int k = 0; k < 6; k++) centres.push_back(Vec3(pos(rng), pos(rng), pos(rng)));
+    for (int i = 0; i < n; i++) {
+        Vec3 c = clustered ? centres[i % 6] + Vec3(gauss(rng), gauss(rng), gauss(rng)) : Vec3(pos(rng), pos(rng), pos(rng));
+        sc.tris.push_back(makeTri(c + Vec3(small(rng), small(rng), small(rng)), c + Vec3(small(rng), small(rng), small(rng)),
+                                  c + Vec3(small(rng), small(rng), small(rng))));
+    }
+    return sc;
+}
+
+// Counts rays whose result differs from testing every triangle (hit / no hit, distance, and the triangle's material).
+static int accelMismatches(Scene& sc, uint32_t seed, int rays, bool* anyHit = nullptr) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> pos(-10, 10), dir(-1, 1);
+    int mismatches = 0, hits = 0;
+    for (int i = 0; i < rays; i++) {
+        Ray r{{pos(rng), pos(rng), pos(rng)}, normalize(Vec3(dir(rng), dir(rng), dir(rng)))};
+        float tmax = (i % 3 == 0) ? 6.0f : INF;
+        float best = tmax; bool found = false;
+        for (const Triangle& tr : sc.tris) {
+            float t, u, v;
+            if (intersectTriangle(r, tr, t, u, v) && t > EPS && t < best) { best = t; found = true; }
+        }
+        Hit h;
+        bool f = sc.intersect(r, tmax, h);
+        if (f != found || (found && h.t != best)) mismatches++;
+        if (anyHit && sc.occluded(r, tmax) != found) mismatches++;
+        hits += found;
+    }
+    if (rays >= 1000) CHECK(hits > 50);
+    return mismatches;
+}
+
+TEST(every_acceleration_mode_finds_the_same_hits_as_testing_every_triangle) {
+    for (bool clustered : {false, true}) {
+        Scene sc = randomTriangleScene(2500, 77, clustered);
+        for (Accel a : {Accel::None, Accel::Median, Accel::Sah})
+            for (bool ordered : {false, true})
+                for (bool anyHit : {false, true}) {
+                    sc.accel = a; sc.buildBvh(); sc.orderedTraversal = ordered; sc.anyHitShadows = anyHit;
+                    bool check = true;
+                    CHECK(accelMismatches(sc, 5, 1500, &check) == 0);
+                }
+    }
+}
+
+TEST(acceleration_handles_degenerate_scenes) {
+    // no triangles, one triangle, many identical triangles, a long chain of triangles along one axis, a coplanar grid
+    Scene empty; empty.materials = {diffuseMat({1, 1, 1})};
+    for (Accel a : {Accel::None, Accel::Median, Accel::Sah}) {
+        empty.accel = a; empty.buildBvh();
+        Hit h; CHECK(!empty.intersect(Ray{{0, 1, 0}, {0, -1, 0}}, INF, h) && !empty.occluded(Ray{{0, 1, 0}, {0, -1, 0}}, INF));
+    }
+    Scene sc; sc.materials = {diffuseMat({1, 1, 1})};
+    sc.tris.push_back(makeTri({-1, 0, -1}, {0, 0, 1}, {1, 0, -1}));
+    for (int i = 0; i < 40; i++) sc.tris.push_back(makeTri({-1, 2, -1}, {0, 2, 1}, {1, 2, -1}));        // identical: same centroid
+    for (int i = 0; i < 3000; i++) { float x = 10.0f + i * 0.7f; sc.tris.push_back(makeTri({x, 0, 0}, {x, 0, 0.5f}, {x + 0.5f, 0, 0})); }   // a chain, in the plane y = 0
+    for (int i = 0; i < 40; i++) for (int j = 0; j < 40; j++)                                            // coplanar grid
+        sc.tris.push_back(makeTri({-30.0f + i, -3, -30.0f + j}, {-29.0f + i, -3, -30.0f + j}, {-30.0f + i, -3, -29.0f + j}));
+    for (Accel a : {Accel::Median, Accel::Sah})
+        for (bool ordered : {false, true}) {
+            sc.accel = a; sc.buildBvh(); sc.orderedTraversal = ordered; sc.anyHitShadows = true;
+            Hit h;
+            CHECK(sc.intersect(Ray{{0, 1, 0}, {0, -1, 0}}, INF, h) && std::fabs(h.t - 1.0f) < 1e-4);                        // the single triangle
+            CHECK(sc.intersect(Ray{{0, 3, 0}, {0, -1, 0}}, INF, h) && std::fabs(h.t - 1.0f) < 1e-4);                        // the identical ones, from above
+            CHECK(sc.intersect(Ray{{10.1f + 0.7f * 2000, 1, 0.1f}, {0, -1, 0}}, INF, h) && std::fabs(h.t - 1.0f) < 1e-3);   // deep in the chain
+            CHECK(sc.occluded(Ray{{10.1f + 0.7f * 2000, 1, 0.1f}, {0, -1, 0}}, INF));
+            CHECK(!sc.occluded(Ray{{10.1f + 0.7f * 2000, 1, 0.1f}, {0, 1, 0}}, INF));
+        }
+}
+
+TEST(sah_needs_less_work_than_the_median_split_on_a_clustered_scene) {
+    Scene sc = randomTriangleScene(20000, 3, true);
+    std::mt19937 rng(9);
+    std::uniform_real_distribution<float> pos(-10, 10), dir(-1, 1);
+    std::vector<Ray> rays;
+    for (int i = 0; i < 4000; i++) rays.push_back(Ray{{pos(rng), pos(rng), pos(rng)}, normalize(Vec3(dir(rng), dir(rng), dir(rng)))});
+    uint64_t work[3];
+    int k = 0;
+    for (Accel a : {Accel::Median, Accel::Sah}) {
+        sc.accel = a; sc.buildBvh(); sc.orderedTraversal = false;
+        tlStats = Stats{};
+        for (const Ray& r : rays) { Hit h; sc.intersect(r, INF, h); }
+        work[k++] = tlStats.nodeVisits + tlStats.triTests;
+    }
+    sc.orderedTraversal = true;                                      // (sc is SAH here)
+    tlStats = Stats{};
+    for (const Ray& r : rays) { Hit h; sc.intersect(r, INF, h); }
+    work[2] = tlStats.nodeVisits + tlStats.triTests;
+    CHECK(work[1] < work[0]);                                        // SAH visits fewer nodes + tests fewer triangles
+    CHECK(work[2] < work[1]);                                        // and visiting the nearer child first saves more
+}
+
+TEST(any_hit_shadow_rays_do_less_work_and_give_the_same_answers) {
+    Scene sc = randomTriangleScene(8000, 4, false);
+    sc.accel = Accel::Sah; sc.buildBvh();
+    std::mt19937 rng(2);
+    std::uniform_real_distribution<float> pos(-10, 10), dir(-1, 1);
+    uint64_t work[2]; int mismatch = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        sc.anyHitShadows = pass == 1;
+        std::mt19937 r2(2);
+        tlStats = Stats{};
+        for (int i = 0; i < 3000; i++) {
+            Ray r{{pos(r2), pos(r2), pos(r2)}, normalize(Vec3(dir(r2), dir(r2), dir(r2)))};
+            Hit h;
+            bool a = sc.occluded(r, 12.0f);
+            if (pass == 0) { sc.anyHitShadows = false; if (a != sc.intersect(r, 12.0f, h)) mismatch++; }
+        }
+        work[pass] = tlStats.nodeVisits + tlStats.triTests;
+    }
+    CHECK(mismatch == 0);
+    CHECK(work[1] < work[0]);
+}
+
+TEST(images_do_not_depend_on_the_acceleration_mode) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.maxDepth = 3;
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.threads = 4; rs.spp = 2; rs.jitter = true; rs.seed = 6;
+    Film ref(WIDTH, HEIGHT); Stats st;
+    sc.accel = Accel::None; sc.buildBvh(); sc.orderedTraversal = false; sc.anyHitShadows = false;
+    renderFrame(sc, cam, ref, rs, nullptr, nullptr, st);
+    for (Accel a : {Accel::Median, Accel::Sah}) for (bool ordered : {false, true}) {
+        sc.accel = a; sc.buildBvh(); sc.orderedTraversal = ordered; sc.anyHitShadows = ordered;
+        Film f(WIDTH, HEIGHT);
+        renderFrame(sc, cam, f, rs, nullptr, nullptr, st);
+        CHECK(sameFilm(ref, f));
+    }
+    Scene room = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");       // 8k triangles: BVH variants only
+    applyDefaultLighting(room); configureLight(room, LightMode::Area, 0);
+    Camera rcam = makeCamera(room);
+    RenderSettings r1; r1.threads = 4; r1.spp = 1; r1.seed = 2;
+    Film base(WIDTH, HEIGHT);
+    renderFrame(room, rcam, base, r1, nullptr, nullptr, st);
+    for (Accel a : {Accel::Median, Accel::Sah}) for (bool ordered : {false, true}) {
+        room.accel = a; room.buildBvh(); room.orderedTraversal = ordered;
+        Film f(WIDTH, HEIGHT);
+        renderFrame(room, rcam, f, r1, nullptr, nullptr, st);
+        CHECK(sameFilm(base, f));
+    }
+}
+
+TEST(set_accel_rebuilds_only_when_needed) {
+    Scene sc = randomTriangleScene(500, 1, false);
+    sc.accel = Accel::Median;
+    sc.buildBvh();
+    size_t nodesMedian = sc.nodes.size();
+    sc.bvhBuildMs = -1;
+    sc.setAccel(Accel::Median);
+    CHECK(sc.bvhBuildMs == -1);                       // already built: untouched
+    sc.setAccel(Accel::Sah);
+    CHECK(sc.bvhBuildMs >= 0 && sc.builtAccel == Accel::Sah && sc.nodes.size() != nodesMedian);
+    sc.setAccel(Accel::None);
+    CHECK(sc.nodes.empty() && sc.builtAccel == Accel::None);
+    sc.setAccel(Accel::Median);
+    CHECK(sc.nodes.size() == nodesMedian);
+}
+
 int main() {
     for (auto& c : tests()) {
         int before = g_failed;

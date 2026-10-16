@@ -26,6 +26,9 @@ struct RenderParams {
     bool mis = true;                          // Path + NEE: weigh light sampling against BSDF sampling (MIS)
     bool russianRoulette = false;             // Path: random path termination (maxDepth stays a hard cap)
     float envScale = 0;                       // Path: sky brightness as environment light
+    Accel accel = Accel::Sah;                 // triangle search: none (every triangle) / BVH with median split / BVH with SAH
+    bool orderedTraversal = true;             // BVH: nearer child first
+    bool anyHitShadows = true;                // Path: shadow rays stop at the first hit
     bool legacyNormals = false;               // true = M0 behaviour at silhouettes (see Scene::legacyNormals)
 };
 
@@ -121,6 +124,9 @@ private:
         scene_->maxDepth = params_.maxDepth;
         configureLight(*scene_, params_.lightMode, params_.lightSize);
         scene_->legacyNormals = params_.legacyNormals;
+        scene_->orderedTraversal = params_.orderedTraversal;
+        scene_->anyHitShadows = params_.anyHitShadows;
+        scene_->setAccel(params_.accel);
         scene_->integrator = params_.integrator;
         scene_->envScale = params_.envScale;
         scene_->nee = params_.nee;

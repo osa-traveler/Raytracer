@@ -3,6 +3,7 @@
 #pragma once
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -257,6 +258,12 @@ enum class LightMode { Point, Area };
 //            (Scene::nee = true), by sampling a point on the emitter at every vertex.
 enum class Integrator { Classic, Path };
 
+// How the triangles are searched for the nearest hit (M5). All three give the same hits; they differ in speed.
+//   None:   test every triangle (the reference; only practical for small scenes).
+//   Median: BVH, each node split at the median centroid along its longest axis.
+//   Sah:    BVH, each node split where the surface area heuristic (binned) estimates the cheapest traversal.
+enum class Accel { None, Median, Sah };
+
 // Rectangular area light, defined in the glb by a node named after the Blender light plus custom properties
 // (exported as glTF "extras"): rt_light_type = "rect", rt_size_x, rt_size_y (metres), rt_radiance.
 // Blender's own light settings are not exported to glTF (AREA lights are unsupported), so these properties
@@ -283,6 +290,11 @@ struct Scene {
     std::vector<Triangle> tris;
     std::vector<BvhNode> nodes;
     std::vector<int> triOrder;
+    Accel accel = Accel::Sah;             // how intersect() searches (setAccel rebuilds the BVH when needed)
+    Accel builtAccel = Accel::None;       // what nodes / triOrder currently hold (None = nothing built)
+    bool orderedTraversal = true;         // BVH: visit the nearer child first, skip boxes beyond the closest hit found
+    bool anyHitShadows = true;            // Path: shadow rays stop at the first hit (occluded()) instead of finding the nearest
+    double bvhBuildMs = 0;                // time of the last BVH build
     PointLight light;
     Vec3 ambient;
     CameraInfo camera;
@@ -301,30 +313,48 @@ struct Scene {
     int rrStartDepth = 3;
     float envScale = 0.0f;      // Path mode: multiplier of the sky gradient seen as environment light (0 = only the area light emits)
 
+    // Builds the BVH for `accel` (Median or Sah). Accel::None builds nothing: intersect() then tests every triangle.
     void buildBvh() {
+        auto t0 = std::chrono::steady_clock::now();
         size_t n = tris.size();
-        triOrder.resize(n);
-        std::vector<Vec3> cen(n);
-        for (size_t i = 0; i < n; i++) {
-            triOrder[i] = (int)i;
-            cen[i] = (tris[i].p0 + tris[i].p1 + tris[i].p2) * (1.0f / 3.0f);
-        }
         nodes.clear();
-        nodes.reserve(2 * n / 2 + 1);
-        build(0, (int)n, cen);
+        triOrder.resize(n);
+        for (size_t i = 0; i < n; i++) triOrder[i] = (int)i;
+        builtAccel = accel;
+        if (accel != Accel::None && n > 0) {
+            std::vector<Vec3> cen(n), lo(n), hi(n);          // per-triangle centroid and bounds
+            for (size_t i = 0; i < n; i++) {
+                const Triangle& t = tris[i];
+                cen[i] = (t.p0 + t.p1 + t.p2) * (1.0f / 3.0f);
+                lo[i] = {std::min(t.p0.x, std::min(t.p1.x, t.p2.x)), std::min(t.p0.y, std::min(t.p1.y, t.p2.y)), std::min(t.p0.z, std::min(t.p1.z, t.p2.z))};
+                hi[i] = {std::max(t.p0.x, std::max(t.p1.x, t.p2.x)), std::max(t.p0.y, std::max(t.p1.y, t.p2.y)), std::max(t.p0.z, std::max(t.p1.z, t.p2.z))};
+            }
+            nodes.reserve(2 * n / 2 + 1);
+            build(0, (int)n, cen, lo, hi);
+        }
+        bvhBuildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
 
-    int build(int begin, int end, const std::vector<Vec3>& cen) {
+    // Chooses the search structure; rebuilds the BVH only when what is built does not match.
+    void setAccel(Accel a) {
+        accel = a;
+        if (builtAccel != a) buildBvh();
+    }
+
+    static float surfaceArea(const Vec3& lo, const Vec3& hi) {
+        Vec3 d = hi - lo;
+        return 2.0f * (d.x * d.y + d.y * d.z + d.z * d.x);
+    }
+
+    int build(int begin, int end, const std::vector<Vec3>& cen, const std::vector<Vec3>& tlo, const std::vector<Vec3>& thi, int depth = 0) {
         int id = (int)nodes.size();
         nodes.emplace_back();
         Vec3 lo(INF, INF, INF), hi(-INF, -INF, -INF), clo = lo, chi = hi;
         for (int i = begin; i < end; i++) {
-            const Triangle& t = tris[triOrder[i]];
-            for (const Vec3* p : {&t.p0, &t.p1, &t.p2}) {
-                lo = {std::min(lo.x, p->x), std::min(lo.y, p->y), std::min(lo.z, p->z)};
-                hi = {std::max(hi.x, p->x), std::max(hi.y, p->y), std::max(hi.z, p->z)};
-            }
-            const Vec3& c = cen[triOrder[i]];
+            int t = triOrder[i];
+            lo = {std::min(lo.x, tlo[t].x), std::min(lo.y, tlo[t].y), std::min(lo.z, tlo[t].z)};
+            hi = {std::max(hi.x, thi[t].x), std::max(hi.y, thi[t].y), std::max(hi.z, thi[t].z)};
+            const Vec3& c = cen[t];
             clo = {std::min(clo.x, c.x), std::min(clo.y, c.y), std::min(clo.z, c.z)};
             chi = {std::max(chi.x, c.x), std::max(chi.y, c.y), std::max(chi.z, c.z)};
         }
@@ -332,17 +362,81 @@ struct Scene {
         nodes[id].bmax = hi + Vec3(EPS, EPS, EPS);
         int count = end - begin;
         Vec3 ext = chi - clo;
-        if (count <= 4 || std::max(ext.x, std::max(ext.y, ext.z)) <= 0) {
-            nodes[id].first = begin; nodes[id].count = count;
-            return id;
-        }
+        auto makeLeaf = [&]() { nodes[id].first = begin; nodes[id].count = count; return id; };
+        if (count <= 1 || depth >= 56 || std::max(ext.x, std::max(ext.y, ext.z)) <= 0) return makeLeaf();   // depth cap: the traversal stack holds 64
+        const int maxLeaf = 4;
         int axis = ext.x > ext.y ? (ext.x > ext.z ? 0 : 2) : (ext.y > ext.z ? 1 : 2);
         auto key = [&](int t) { const Vec3& c = cen[t]; return axis == 0 ? c.x : axis == 1 ? c.y : c.z; };
         int mid = (begin + end) / 2;
+
+        if (accel == Accel::Sah) {
+            // Binned SAH: put the centroids into B bins along each axis, and for every bin boundary estimate
+            //   cost = traversal + (area_left / area_parent) * n_left * intersect + (area_right / area_parent) * n_right * intersect.
+            const int B = 16;
+            const float costTraverse = 1.0f, costIntersect = 1.0f;
+            float parentArea = surfaceArea(lo, hi);
+            float bestCost = INF; int bestAxis = -1, bestBin = -1;
+            for (int ax = 0; ax < 3; ax++) {
+                float cmin = ax == 0 ? clo.x : ax == 1 ? clo.y : clo.z, cext = ax == 0 ? ext.x : ax == 1 ? ext.y : ext.z;
+                if (cext <= 0) continue;
+                Vec3 blo[B], bhi[B]; int bcount[B];
+                for (int k = 0; k < B; k++) { blo[k] = Vec3(INF, INF, INF); bhi[k] = Vec3(-INF, -INF, -INF); bcount[k] = 0; }
+                for (int i = begin; i < end; i++) {
+                    int t = triOrder[i];
+                    float c = ax == 0 ? cen[t].x : ax == 1 ? cen[t].y : cen[t].z;
+                    int k = std::min(B - 1, (int)(B * (c - cmin) / cext));
+                    bcount[k]++;
+                    blo[k] = {std::min(blo[k].x, tlo[t].x), std::min(blo[k].y, tlo[t].y), std::min(blo[k].z, tlo[t].z)};
+                    bhi[k] = {std::max(bhi[k].x, thi[t].x), std::max(bhi[k].y, thi[t].y), std::max(bhi[k].z, thi[t].z)};
+                }
+                // sweep from the right to get the areas of the right parts, then from the left
+                float rightArea[B]; int rightCount[B];
+                Vec3 rlo(INF, INF, INF), rhi(-INF, -INF, -INF); int rc = 0;
+                for (int k = B - 1; k >= 1; k--) {
+                    rc += bcount[k];
+                    rlo = {std::min(rlo.x, blo[k].x), std::min(rlo.y, blo[k].y), std::min(rlo.z, blo[k].z)};
+                    rhi = {std::max(rhi.x, bhi[k].x), std::max(rhi.y, bhi[k].y), std::max(rhi.z, bhi[k].z)};
+                    rightArea[k] = rc ? surfaceArea(rlo, rhi) : 0.0f; rightCount[k] = rc;
+                }
+                Vec3 llo(INF, INF, INF), lhi(-INF, -INF, -INF); int lc = 0;
+                for (int k = 0; k < B - 1; k++) {
+                    lc += bcount[k];
+                    llo = {std::min(llo.x, blo[k].x), std::min(llo.y, blo[k].y), std::min(llo.z, blo[k].z)};
+                    lhi = {std::max(lhi.x, bhi[k].x), std::max(lhi.y, bhi[k].y), std::max(lhi.z, bhi[k].z)};
+                    if (lc == 0 || rightCount[k + 1] == 0) continue;           // one side would be empty
+                    float cost = costTraverse + costIntersect * (surfaceArea(llo, lhi) * lc + rightArea[k + 1] * rightCount[k + 1]) / parentArea;
+                    if (cost < bestCost) { bestCost = cost; bestAxis = ax; bestBin = k; }
+                }
+            }
+            if (bestAxis >= 0) {
+                if (count <= maxLeaf && bestCost >= costIntersect * count) return makeLeaf();   // splitting does not pay off
+                float cmin = bestAxis == 0 ? clo.x : bestAxis == 1 ? clo.y : clo.z;
+                float cext = bestAxis == 0 ? ext.x : bestAxis == 1 ? ext.y : ext.z;
+                auto binOf = [&](int t) {
+                    float c = bestAxis == 0 ? cen[t].x : bestAxis == 1 ? cen[t].y : cen[t].z;
+                    return std::min(B - 1, (int)(B * (c - cmin) / cext));
+                };
+                int* m = std::partition(triOrder.data() + begin, triOrder.data() + end, [&](int t) { return binOf(t) <= bestBin; });
+                mid = (int)(m - triOrder.data());
+                if (mid == begin || mid == end) {                              // cannot happen with the cost test above; stay safe
+                    mid = (begin + end) / 2;
+                    std::nth_element(triOrder.begin() + begin, triOrder.begin() + mid, triOrder.begin() + end,
+                                     [&](int a, int b) { return key(a) < key(b); });
+                }
+                build(begin, mid, cen, tlo, thi, depth + 1);
+                int right = build(mid, end, cen, tlo, thi, depth + 1);
+                nodes[id].left = id + 1; nodes[id].right = right;
+                return id;
+            }
+            return makeLeaf();
+        }
+
+        // Median split
+        if (count <= maxLeaf) return makeLeaf();
         std::nth_element(triOrder.begin() + begin, triOrder.begin() + mid, triOrder.begin() + end,
                          [&](int a, int b) { return key(a) < key(b); });
-        build(begin, mid, cen);
-        int right = build(mid, end, cen);
+        build(begin, mid, cen, tlo, thi, depth + 1);
+        int right = build(mid, end, cen, tlo, thi, depth + 1);
         nodes[id].left = id + 1;
         nodes[id].right = right;
         return id;
@@ -358,38 +452,124 @@ struct Scene {
     }
 
     // Moller-Trumbore, double sided. Returns closest hit.
+    // Entry distance of the ray into a node's box (inside tmax), for visiting the nearer child first.
+    static bool hitBoxT(const BvhNode& n, const Ray& r, const Vec3& inv, float tmax, float& tnear) {
+        float tx0 = (n.bmin.x - r.o.x) * inv.x, tx1 = (n.bmax.x - r.o.x) * inv.x;
+        float ty0 = (n.bmin.y - r.o.y) * inv.y, ty1 = (n.bmax.y - r.o.y) * inv.y;
+        float tz0 = (n.bmin.z - r.o.z) * inv.z, tz1 = (n.bmax.z - r.o.z) * inv.z;
+        float t0 = std::max(std::max(std::min(tx0, tx1), std::min(ty0, ty1)), std::max(std::min(tz0, tz1), 0.0f));
+        float t1 = std::min(std::min(std::max(tx0, tx1), std::max(ty0, ty1)), std::min(std::max(tz0, tz1), tmax));
+        tnear = t0;
+        return t0 <= t1;
+    }
+
+    void fillHit(Hit& hit, const Ray& r, float best, const Triangle* bt, float bu, float bv) const {
+        hit.t = best;
+        hit.p = r.o + r.d * best;
+        hit.n = normalize(bt->n0 * (1 - bu - bv) + bt->n1 * bu + bt->n2 * bv);
+        Vec3 g = normalize(cross(bt->p1 - bt->p0, bt->p2 - bt->p0));
+        hit.ng = dot(g, bt->n0 + bt->n1 + bt->n2) < 0 ? -g : g;   // follow the vertex normals, not the winding order
+        hit.material = bt->material;
+    }
+
+    // Nearest hit with EPS < t < tmax. Which triangles are looked at depends on `accel` (None / BVH, optionally ordered).
     bool intersect(const Ray& r, float tmax, Hit& hit) const {
-        if (nodes.empty()) return false;
+        if (tris.empty()) return false;
         tlStats.rays++;
         bool found = false;
         float best = tmax;
         const Triangle* bt = nullptr;
         float bu = 0, bv = 0;
+        if (accel == Accel::None || builtAccel == Accel::None || nodes.empty()) {
+            for (const Triangle& tr : tris) {
+                float t, u, v;
+                tlStats.triTests++;
+                if (!intersectTriangle(r, tr, t, u, v)) continue;
+                if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
+            }
+        } else if (!orderedTraversal) {
+            Vec3 inv(1.0f / r.d.x, 1.0f / r.d.y, 1.0f / r.d.z);
+            int stack[64], sp = 0;
+            stack[sp++] = 0;
+            while (sp) {
+                const BvhNode& nd = nodes[stack[--sp]];
+                tlStats.nodeVisits++;
+                if (!hitBox(nd, r, inv, best)) continue;
+                if (nd.count == 0) { stack[sp++] = nd.left; stack[sp++] = nd.right; continue; }
+                for (int k = nd.first; k < nd.first + nd.count; k++) {
+                    const Triangle& tr = tris[triOrder[k]];
+                    float t, u, v;
+                    tlStats.triTests++;
+                    if (!intersectTriangle(r, tr, t, u, v)) continue;
+                    if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
+                }
+            }
+        } else {
+            // Ordered: test both children when a node is opened, push the farther one first so the nearer is visited
+            // first, and drop entries whose box starts beyond the closest hit found so far.
+            Vec3 inv(1.0f / r.d.x, 1.0f / r.d.y, 1.0f / r.d.z);
+            struct Entry { int node; float tnear; };
+            Entry stack[64]; int sp = 0;
+            float tn;
+            tlStats.nodeVisits++;
+            if (hitBoxT(nodes[0], r, inv, best, tn)) stack[sp++] = {0, tn};
+            while (sp) {
+                Entry e = stack[--sp];
+                if (e.tnear > best) continue;
+                const BvhNode& nd = nodes[e.node];
+                if (nd.count == 0) {
+                    float tl = 0, tr2 = 0;
+                    tlStats.nodeVisits += 2;
+                    bool hl = hitBoxT(nodes[nd.left], r, inv, best, tl), hr = hitBoxT(nodes[nd.right], r, inv, best, tr2);
+                    if (hl && hr) {
+                        if (tl <= tr2) { stack[sp++] = {nd.right, tr2}; stack[sp++] = {nd.left, tl}; }
+                        else           { stack[sp++] = {nd.left, tl};  stack[sp++] = {nd.right, tr2}; }
+                    } else if (hl) stack[sp++] = {nd.left, tl};
+                    else if (hr) stack[sp++] = {nd.right, tr2};
+                    continue;
+                }
+                for (int k = nd.first; k < nd.first + nd.count; k++) {
+                    const Triangle& tr = tris[triOrder[k]];
+                    float t, u, v;
+                    tlStats.triTests++;
+                    if (!intersectTriangle(r, tr, t, u, v)) continue;
+                    if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
+                }
+            }
+        }
+        if (found) fillHit(hit, r, best, bt, bu, bv);
+        return found;
+    }
+
+    // Is there any hit with EPS < t < tmax? Same answer as intersect(), but stops at the first one found (shadow rays).
+    bool occluded(const Ray& r, float tmax) const {
+        if (tris.empty()) return false;
+        if (!anyHitShadows) { Hit h; return intersect(r, tmax, h); }
+        tlStats.rays++;
+        if (accel == Accel::None || builtAccel == Accel::None || nodes.empty()) {
+            for (const Triangle& tr : tris) {
+                float t, u, v;
+                tlStats.triTests++;
+                if (intersectTriangle(r, tr, t, u, v) && t > EPS && t < tmax) return true;
+            }
+            return false;
+        }
         Vec3 inv(1.0f / r.d.x, 1.0f / r.d.y, 1.0f / r.d.z);
         int stack[64], sp = 0;
         stack[sp++] = 0;
         while (sp) {
             const BvhNode& nd = nodes[stack[--sp]];
             tlStats.nodeVisits++;
-            if (!hitBox(nd, r, inv, best)) continue;
+            if (!hitBox(nd, r, inv, tmax)) continue;
             if (nd.count == 0) { stack[sp++] = nd.left; stack[sp++] = nd.right; continue; }
             for (int k = nd.first; k < nd.first + nd.count; k++) {
                 const Triangle& tr = tris[triOrder[k]];
                 float t, u, v;
                 tlStats.triTests++;
-                if (!intersectTriangle(r, tr, t, u, v)) continue;
-                if (t > EPS && t < best) { best = t; bt = &tr; bu = u; bv = v; found = true; }
+                if (intersectTriangle(r, tr, t, u, v) && t > EPS && t < tmax) return true;
             }
         }
-        if (found) {
-            hit.t = best;
-            hit.p = r.o + r.d * best;
-            hit.n = normalize(bt->n0 * (1 - bu - bv) + bt->n1 * bu + bt->n2 * bv);
-            Vec3 g = normalize(cross(bt->p1 - bt->p0, bt->p2 - bt->p0));
-            hit.ng = dot(g, bt->n0 + bt->n1 + bt->n2) < 0 ? -g : g;   // follow the vertex normals, not the winding order
-            hit.material = bt->material;
-        }
-        return found;
+        return false;
     }
 };
 
@@ -788,8 +968,7 @@ inline Vec3 sampleDirectLight(const Scene& sc, const Vec3& x, const Vec3& N, con
     float cosX = dot(N, wi), cosGeo = dot(Ng, wi), cosL = dot(a.normal, wi * -1.0f);
     if (cosX <= 0 || cosGeo <= 0 || cosL <= 0) return Vec3(0, 0, 0);
     tlStats.shadowRays++;
-    Hit blocker;
-    if (sc.intersect(Ray{x + Ng * (EPS * 10), wi}, dist - EPS * 10, blocker)) return Vec3(0, 0, 0);
+    if (sc.occluded(Ray{x + Ng * (EPS * 10), wi}, dist - EPS * 10)) return Vec3(0, 0, 0);
     float pdfLight = lightPdfSolidAngle(a, dist2, cosL), pdfBsdf = bsdfPdfLambert(cosX);
     float weight = mis ? powerHeuristic(pdfLight, pdfBsdf) : 1.0f;
     return albedo * (a.radiance * pdfBsdf / pdfLight * weight);

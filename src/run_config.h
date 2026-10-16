@@ -63,6 +63,9 @@ inline void writeRunConfig(const std::string& path, const RenderParams& p, const
                  scene.camera.valid ? "true" : "false", cam.pos.x, cam.pos.y, cam.pos.z,
                  cam.forward.x, cam.forward.y, cam.forward.z, cam.tanHalfFov);
     std::fprintf(f, "  \"triangles\": %zu,\n  \"materials\": %zu,\n  \"bvh_nodes\": %zu,\n", scene.tris.size(), scene.materials.size(), scene.nodes.size());
+    std::fprintf(f, "  \"acceleration\": {\"structure\": \"%s\", \"ordered_traversal\": %s, \"any_hit_shadows\": %s, \"bvh_build_ms\": %.2f},\n",
+                 scene.accel == Accel::None ? "none (every triangle)" : scene.accel == Accel::Sah ? "bvh, binned sah" : "bvh, median split",
+                 scene.orderedTraversal ? "true" : "false", scene.anyHitShadows ? "true" : "false", scene.bvhBuildMs);
     std::fprintf(f, "  \"build\": \"%s\",\n  \"compiler\": \"%s\",\n", build, jsonEscape(__VERSION__).c_str());
     std::fprintf(f, "  \"timing_ms\": {\"load_and_bvh\": %.2f, \"render_runs\": [", loadMs);
     for (size_t i = 0; i < renderMs.size(); i++) std::fprintf(f, "%s%.2f", i ? ", " : "", renderMs[i]);

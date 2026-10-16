@@ -5,6 +5,7 @@
 //
 // Options (initial values of the panel, or the settings of a headless render):
 //   --spp N  --jitter  --seed N  --threads N  --max-depth N  --exposure X  --gamma X
+//   --accel none|median|sah  --no-ordered  --no-any-hit   (triangle search, default SAH; nearer child first; Path shadow rays stop at the first hit. All give the same image)
 //   --integrator classic|path  --env X  --no-nee  --no-mis  --rr   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
 //   --legacy-normals   (M0 behaviour at silhouettes: reproduces the M0 baseline images bit for bit)
 //   --light point|area  --light-size METRES   (area = soft shadows; point = the M0 baseline; size 0 = as in the glb)
@@ -55,6 +56,11 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--integrator" && (v = next())) p.integrator = std::string(v) == "path" ? Integrator::Path : Integrator::Classic;
         else if (a == "--progressive") { p.progressive = true; o.progressiveSet = true; }
         else if (a == "--no-progressive") { p.progressive = false; o.progressiveSet = true; }
+        else if (a == "--accel" && (v = next())) p.accel = std::string(v) == "none" ? Accel::None : std::string(v) == "sah" ? Accel::Sah : Accel::Median;
+        else if (a == "--ordered") p.orderedTraversal = true;
+        else if (a == "--no-ordered") p.orderedTraversal = false;
+        else if (a == "--any-hit") p.anyHitShadows = true;
+        else if (a == "--no-any-hit") p.anyHitShadows = false;
         else if (a == "--no-nee") p.nee = false;
         else if (a == "--mis") p.mis = true;
         else if (a == "--no-mis") p.mis = false;
@@ -91,6 +97,9 @@ static int runHeadless(const Options& opt) {
     scene.integrator = p.integrator;
     scene.envScale = p.envScale;
     scene.nee = p.nee;
+    scene.orderedTraversal = p.orderedTraversal;
+    scene.anyHitShadows = p.anyHitShadows;
+    scene.setAccel(p.accel);
     scene.mis = p.mis;
     scene.russianRoulette = p.russianRoulette;
     Camera cam = makeCamera(scene);

@@ -282,6 +282,11 @@ int runGui(const GuiOptions& opt) {
         ImGui::SliderFloat("light size (m)", &params.lightSize, 0.0f, 8.0f, params.lightSize <= 0 ? "as in file" : "%.2f");
         ImGui::EndDisabled();
         ImGui::Checkbox("legacy silhouette normals (M0)", &params.legacyNormals);
+        int accelIndex = params.accel == Accel::None ? 0 : params.accel == Accel::Median ? 1 : 2;
+        ImGui::Combo("triangle search", &accelIndex, "none (every triangle)\0BVH, median split\0BVH, SAH\0");
+        params.accel = accelIndex == 0 ? Accel::None : accelIndex == 1 ? Accel::Median : Accel::Sah;
+        ImGui::Checkbox("nearer BVH child first", &params.orderedTraversal);
+        ImGui::Checkbox("shadow rays: stop at first hit (path)", &params.anyHitShadows);
 
         ImGui::BeginDisabled(busy);
         if (ImGui::Button("Render", ImVec2(120, 0))) startRender();
@@ -338,7 +343,7 @@ int runGui(const GuiOptions& opt) {
             const RenderParams cur = job.params();
             const bool changed = params.jitter != cur.jitter || (uint64_t)std::max(0, seedInput) != cur.seed || params.threads != cur.threads ||
                                  params.maxDepth != cur.maxDepth || params.lightMode != cur.lightMode || params.lightSize != cur.lightSize ||
-                                 params.legacyNormals != cur.legacyNormals || params.integrator != cur.integrator || params.nee != cur.nee || params.mis != cur.mis || params.russianRoulette != cur.russianRoulette ||
+                                 params.legacyNormals != cur.legacyNormals || params.integrator != cur.integrator || params.nee != cur.nee || params.accel != cur.accel || params.orderedTraversal != cur.orderedTraversal || params.anyHitShadows != cur.anyHitShadows || params.mis != cur.mis || params.russianRoulette != cur.russianRoulette ||
                                  params.envScale != cur.envScale || params.progressive != cur.progressive;
             if (changed) pendingRestart = true;
         }
