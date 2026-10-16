@@ -56,6 +56,7 @@ GLB を読む → 三角形(ワールド座標)に展開 → BVH 構築
 | カメラ: シーン内の最初の透視カメラ | 正射影カメラ、複数カメラの切り替え |
 | 面光源(矩形): ノードの extras(`rt_light_type` = "rect"、`rt_size_x`、`rt_size_y`、`rt_radiance`)と、ノードの変換。描画に使う(M1) | ライト(`KHR_lights_punctual`)。Blender のエリアライト自体は GLB に出力されないので、Blender のカスタムプロパティで補っている |
 
+- **Blender から書き出すときの注意**: 面光源のノードを glb に出すには、エクスポータの `export_lights=True`(ライトを含める。「未対応の AREA」という警告は出るが、ノードと extras は書かれる)が必要。オフだと光源がなく、画面は**真っ黒**になる(2026-10-16 に実際に起きた)。`export_extras=True` と `export_cameras=True` も使う。**テクスチャは読まない**ので、テクスチャ付きの材質は、係数だけの材質に置き換えて書き出す(例: `tools/export_beetle_room.py`)。
 - 座標系は glTF(Y 上、右手系)。Blender(Z 上)からの変換はエクスポータが行う。
 - 法線はワールド座標へ変換して使う(逆転置行列の余因子で計算)。
 - `doubleSided` は参照せず、すべての面を両面として扱う。

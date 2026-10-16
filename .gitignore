@@ -54,3 +54,7 @@ experiments/2026-10-16_m7-materials/*.png
 # Cycles comparison: numbers in results.* / notes.md, figures in docs/screenshots/; run.sh regenerates the images (needs Blender)
 experiments/2026-10-16_m7-cycles/*.png
 experiments/2026-10-16_m7-cycles/*.exr
+
+# Purchased model (CGTrader), too large / licensed
+Assets/bettle/
+Scene/Test/Beetle_Room.glb

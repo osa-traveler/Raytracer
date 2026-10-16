@@ -71,6 +71,7 @@ cmake --build build-release
 - `Scene/Test/Cornell.glb`: Cornell Box(`tools/make_cornell.py` で生成。赤壁・緑壁・白い箱2個・天井の面光源)。パストレーシング(`--integrator path`)の検証用
 - `Scene/Test/Room_2Spheres.glb`: 基準シーン(部屋、金属球、ガラス球。球は部屋の中心に対称)
 - `Scene/Test/Untitled.glb`: Blender で作成した検証用シーン(部屋、金属球、青い拡散球、ガラス球)
+- `Scene/Test/Beetle_Room.glb`(**Git 対象外**): 部屋 + 購入モデル(CGTrader の空冷ビートル、約47万三角形)+ ガラス球 2 個。Blender から `tools/export_beetle_room.py` で書き出す。レンダラがテクスチャを読めないため、ビートルは単色の材質に置き換えてある(値は見た目からの近似)。描画例: `docs/screenshots/2026-10-16_beetle-room-256spp-path-pbr.png`(256 spp、113 s、`experiments/2026-10-16_beetle/`)。修正済みの Blender ファイルは `Assets/bettle/Bettle_Blender.blend`(Git 対象外)。購入モデル(CGTrader「VW Classic Bettle」、Royalty Free License)の描画画像は公開できる見込み(ユーザーが確認)。モデルのファイル自体は再配布しない
 - `Assets/VW_Beetle_1967.glb`: Blender で手作りした1967年式フォルクスワーゲン・ビートル風のモデル(約31万三角形。簡易的な形状で、正確な再現ではありません)。
   レンダリングが重いため、現在のシーンには含めていません。
 
