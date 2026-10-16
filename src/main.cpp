@@ -10,6 +10,7 @@
 //   --integrator classic|path  --env X  --no-nee  --no-mis  --rr   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
 //   --legacy-normals   (M0 behaviour at silhouettes: reproduces the M0 baseline images bit for bit)
 //   --no-textures      (ignore baseColor / metallicRoughness textures and use the material factors only; default: use them)
+//   --no-normal-maps   (ignore normal maps, keep the other textures; default: use them)
 //   --cull-backfaces   (honour glTF doubleSided = false: the back of a one-sided surface is invisible to all rays; default off = every surface double sided)
 //   --light point|area  --light-size METRES   (area = soft shadows; point = the M0 baseline; size 0 = as in the glb)
 // Headless only:
@@ -75,6 +76,7 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--legacy-normals") p.legacyNormals = true;
         else if (a == "--cull-backfaces") p.cullBackfaces = true;
         else if (a == "--no-textures") p.textures = false;
+        else if (a == "--no-normal-maps") p.normalMaps = false;
         else if (a == "--screenshot" && (v = next())) o.gui.screenshot = v;
         else if (a == "--gui-selftest" && (v = next())) o.gui.selfTest = v;
         else if (a.rfind("--", 0) != 0) p.scene = a;
@@ -104,6 +106,7 @@ static int runHeadless(const Options& opt) {
     scene.legacyNormals = p.legacyNormals;
     scene.cullBackfaces = p.cullBackfaces;
     scene.useTextures = p.textures;
+    scene.useNormalMaps = p.normalMaps;
     scene.integrator = p.integrator;
     scene.envScale = p.envScale;
     scene.nee = p.nee;

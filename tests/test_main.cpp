@@ -1620,10 +1620,10 @@ static float srgbToLinear(int v) { float c = v / 255.0f; return c <= 0.04045f ? 
 // zlib level 9 (fixed and dynamic Huffman blocks), so decoding the embedded images covers the inflate and unfilter code.
 TEST(png_decoder_reproduces_every_pixel_of_zlib_compressed_filtered_pngs) {
     Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
-    CHECK(sc.textures.size() == 3);
-    if (sc.textures.size() != 3) return;
-    const Texture &chk = sc.textures[0], &mr = sc.textures[1], &pat = sc.textures[2];
-    CHECK(chk.w == 16 && chk.h == 16 && mr.w == 16 && mr.h == 16 && pat.w == 128 && pat.h == 128);
+    CHECK(sc.textures.size() == 4);
+    if (sc.textures.size() != 4) return;
+    const Texture &chk = sc.textures[0], &mr = sc.textures[1], &pat = sc.textures[2], &nm = sc.textures[3];
+    CHECK(chk.w == 16 && chk.h == 16 && mr.w == 16 && mr.h == 16 && pat.w == 128 && pat.h == 128 && nm.w == 16 && nm.h == 16);
     int bad = 0;
     for (int y = 0; y < 16; y++)
         for (int x = 0; x < 16; x++) {
@@ -1632,6 +1632,8 @@ TEST(png_decoder_reproduces_every_pixel_of_zlib_compressed_filtered_pngs) {
             bad += !(red ? (a[0] == 230 && a[1] == 40 && a[2] == 40) : (a[0] == 240 && a[1] == 240 && a[2] == 240));
             const uint8_t* b = &mr.rgb[((size_t)y * 16 + x) * 3];
             bad += !(y < 8 ? (b[0] == 0 && b[1] == 64 && b[2] == 255) : (b[0] == 0 && b[1] == 255 && b[2] == 0));
+            const uint8_t* d = &nm.rgb[((size_t)y * 16 + x) * 3];
+            bad += !(x < 8 ? (d[0] == 204 && d[1] == 128 && d[2] == 230) : (d[0] == 128 && d[1] == 204 && d[2] == 230));
         }
     for (int y = 0; y < 128; y++)
         for (int x = 0; x < 128; x++) {
@@ -1683,7 +1685,7 @@ TEST(texture_sampling_is_bilinear_repeating_and_decodes_srgb_before_blending) {
 
 TEST(textured_materials_follow_the_uv_of_the_hit_and_can_be_switched_off) {
     Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
-    CHECK(sc.materials.size() == 2 && sc.materials[0].baseColorTex >= 0 && sc.materials[0].metalRoughTex >= 0 && sc.materials[1].baseColorTex >= 0);
+    CHECK(sc.materials.size() == 3 && sc.materials[0].baseColorTex >= 0 && sc.materials[0].metalRoughTex >= 0 && sc.materials[1].baseColorTex >= 0);
     // straight down onto the floor: uv = ((x + 4) / 4, (z + 4) / 4); a 4-pixel cell is 1 m
     auto at = [&](float x, float z, Material& tmp) {
         Hit h;
@@ -1737,6 +1739,68 @@ TEST(textures_change_nothing_for_scenes_without_textures_and_reach_the_path_trac
         }
     CHECK(redTex > 1.15 * blueTex);
     CHECK(std::fabs(redPlain - bluePlain) < 0.05 * redPlain);
+}
+
+// ---- normal maps (M8): tangent frame from the UVs, handedness, glTF convention (+X = u, +Y = up in the image)
+
+TEST(normal_map_follows_the_tangent_frame_for_both_handednesses_and_can_be_switched_off) {
+    // Scene/Test/TextureTest.glb: the left wall (x = -4, normal +x) and the right wall (x = +4, normal -x) carry the same normal map
+    // (left half of the image tn = (0.6, 0, 0.8), right half tn = (0, 0.6, 0.8)); u grows with +z, "up in the image" is +y on both.
+    // Seen from inside the room the left wall's frame has handedness -1 and the right wall's +1, which only a correct handedness gets right.
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
+    CHECK(sc.materials.size() == 3 && sc.materials[2].normalTex >= 0 && sc.materials[2].normalScale == 1.0f);
+    const float r = 204 / 255.0f * 2 - 1, g = 128 / 255.0f * 2 - 1, b = 230 / 255.0f * 2 - 1;   // the decoded 8-bit values (0.6, ~0, ~0.8)
+    struct Case { float x, dirx, z, nx, expect[3]; int w; };
+    // ray from (0, 3, z) along -x hits the left wall at (-4, 3, z); along +x the right wall
+    Case cases[4] = {
+        {-4, -1, -2, 1,  {b, g, r},  -1},     // left wall, u = 0.25 (left half): n' = r * (+z) + g * (+y) + b * (+x)
+        {-4, -1,  2, 1,  {b, r, g},  -1},     // left wall, u = 0.75 (right half): n' = g * (+z) + r * (+y) + b * (+x)
+        { 4,  1, -2, -1, {-b, g, r},  1},     // right wall, left half: n' = r * (+z) + g * (+y) + b * (-x)
+        { 4,  1,  2, -1, {-b, r, g},  1},     // right wall, right half
+    };
+    for (const Case& c : cases) {
+        Hit h;
+        CHECK(sc.intersect(Ray{Vec3(0, 3, c.z), Vec3(c.dirx, 0, 0)}, INF, h));
+        CHECK(h.tw == (float)c.w);
+        CHECK_NEAR(dot(h.tg, Vec3(0, 0, 1)) / length(h.tg), 1.0, 1e-4);                 // the tangent is +z (the direction of increasing u)
+        Hit plain = h;
+        applyNormalMap(sc, h);
+        Vec3 want = normalize(Vec3(c.expect[0], c.expect[1], c.expect[2]));
+        CHECK(dot(h.n, want) > 0.99995f);                                                // the perturbed normal
+        CHECK(dot(h.ng, Vec3(c.nx, 0, 0)) > 0.9999f);                                    // the geometric normal is untouched
+        CHECK_NEAR(length(h.n), 1.0, 1e-5);
+        for (int mode = 0; mode < 3; mode++) {                                           // off: no textures / no normal maps / scale 0
+            Scene off = sc;
+            if (mode == 0) off.useTextures = false;
+            if (mode == 1) off.useNormalMaps = false;
+            if (mode == 2) off.materials[2].normalScale = 0.0f;
+            Hit q = plain;
+            applyNormalMap(off, q);
+            CHECK(dot(q.n, Vec3(c.nx, 0, 0)) > 0.9999f);                                 // the interpolated vertex normal, unchanged (scale 0 -> x = y = 0)
+        }
+    }
+}
+
+TEST(normal_map_changes_the_picture_and_leaves_scenes_without_one_alone) {
+    Scene tt = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
+    applyDefaultLighting(tt); configureLight(tt, LightMode::Area, 0);
+    tt.integrator = Integrator::Path; tt.bsdfModel = BsdfModel::Pbr; tt.maxDepth = 3;
+    Camera cam = makeCamera(tt);
+    RenderSettings rs; rs.spp = 2; rs.jitter = true; rs.seed = 4; rs.threads = 2;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT);
+    Stats st;
+    tt.useNormalMaps = true;  renderFrame(tt, cam, a, rs, nullptr, nullptr, st);
+    tt.useNormalMaps = false; renderFrame(tt, cam, b, rs, nullptr, nullptr, st);
+    CHECK(!sameFilm(a, b));                                                              // the side walls look different with the normal map
+    // a scene with textures but no normal map is unaffected by the switch
+    Scene room = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    applyDefaultLighting(room); configureLight(room, LightMode::Area, 0);
+    room.integrator = Integrator::Path; room.bsdfModel = BsdfModel::Pbr; room.maxDepth = 3;
+    Camera cam2 = makeCamera(room);
+    Film c(WIDTH, HEIGHT), d(WIDTH, HEIGHT);
+    room.useNormalMaps = true;  renderFrame(room, cam2, c, rs, nullptr, nullptr, st);
+    room.useNormalMaps = false; renderFrame(room, cam2, d, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(c, d));
 }
 
 int main() {

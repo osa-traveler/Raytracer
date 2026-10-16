@@ -5,7 +5,9 @@ A floor (8 x 8 m, UV 0..2 so the texture repeats twice each way) with
   * baseColorTexture: a 16 x 16 checker, 4 x 4 pixel cells, red (even cells) / white (odd cells), and
   * metallicRoughnessTexture (glTF packing: G = roughness, B = metalness): the top half of the image is metal with G = 64
     (roughness 0.25), the bottom half is a rough dielectric (G = 255, B = 0);
-and a back wall with a 128 x 128 test pattern, pixel (x, y) = ((3x + 5y) & 255, (x*x + y) & 255, (x ^ y) & 255), which is
+a left (x = -4) and a right (x = +4) side wall with a tangent-space normal map (16 x 16: left half of the image tilts the normal towards +u,
+(tn = (0.6, 0, 0.8)), right half towards "up in the image" (tn = (0, 0.6, 0.8))); the two walls are seen from inside, so the tangent
+frame has handedness -1 on the left wall and +1 on the right one; and a back wall with a 128 x 128 test pattern, pixel (x, y) = ((3x + 5y) & 255, (x*x + y) & 255, (x ^ y) & 255), which is
 compressible enough for zlib to use dynamic Huffman blocks. The PNGs are written with all five scanline filters (row y uses
 filter y % 5) and zlib level 9, so the renderer's decoder meets every case. tests/test_main.cpp recomputes the same pixels.
 Y up, glTF conventions; area light and camera as in make_material_row.py.
@@ -52,7 +54,10 @@ def metal_rough(x, y):                     # R unused, G = roughness, B = metaln
 def pattern(x, y):
     return ((3 * x + 5 * y) & 255, (x * x + y) & 255, (x ^ y) & 255)
 
-images = [png_bytes(16, 16, checker), png_bytes(16, 16, metal_rough), png_bytes(128, 128, pattern)]
+def normal_map(x, y):                      # tangent-space normals, 8 bit: tn = (0.6, 0, 0.8) on the left half, (0, 0.6, 0.8) on the right
+    return (204, 128, 230) if x < 8 else (128, 204, 230)
+
+images = [png_bytes(16, 16, checker), png_bytes(16, 16, metal_rough), png_bytes(128, 128, pattern), png_bytes(16, 16, normal_map)]
 
 meshes, mats, nodes, accessors, views = [], [], [], [], []
 bin_data = bytearray()
@@ -86,10 +91,17 @@ mats.append({'name': 'floor', 'doubleSided': True, 'pbrMetallicRoughness': {
     'baseColorTexture': {'index': 0}, 'metallicRoughnessTexture': {'index': 1}}})
 mats.append({'name': 'wall', 'doubleSided': True, 'pbrMetallicRoughness': {
     'baseColorFactor': [1, 1, 1, 1], 'metallicFactor': 0.0, 'roughnessFactor': 0.8, 'baseColorTexture': {'index': 2}}})
+mats.append({'name': 'sidewall', 'doubleSided': True, 'pbrMetallicRoughness': {
+    'baseColorFactor': [0.7, 0.7, 0.7, 1], 'metallicFactor': 0.0, 'roughnessFactor': 0.9}, 'normalTexture': {'index': 3, 'scale': 1.0}})
 # floor: world (x, z) in [-4, 4]^2  ->  uv = ((x + 4) / 4, (z + 4) / 4)  (0..2)
 quad('floor', [(-4, 0, 4), (4, 0, 4), (4, 0, -4), (-4, 0, -4)], (0, 1, 0), [(0, 2), (2, 2), (2, 0), (0, 0)], 0)
 # wall at z = -4, x in [-4, 4], y in [0, 6]  ->  uv = ((x + 4) / 8, 1 - y / 6)
 quad('wall', [(-4, 0, -4), (4, 0, -4), (4, 6, -4), (-4, 6, -4)], (0, 0, 1), [(0, 1), (1, 1), (1, 0), (0, 0)], 1)
+
+# left wall at x = -4 (normal +x): uv = ((z + 4) / 8, 1 - y / 6), so u grows with +z and v runs down; handedness -1
+quad('left_wall', [(-4, 0, 4), (-4, 0, -4), (-4, 6, -4), (-4, 6, 4)], (1, 0, 0), [(1, 1), (0, 1), (0, 0), (1, 0)], 2)
+# right wall at x = +4 (normal -x): the same uv rule, seen from inside the room; handedness +1
+quad('right_wall', [(4, 0, -4), (4, 0, 4), (4, 6, 4), (4, 6, -4)], (-1, 0, 0), [(0, 1), (1, 1), (1, 0), (0, 0)], 2)
 
 h = math.sqrt(0.5)
 nodes.append({'name': 'Area_Light', 'translation': [0.0, 5.0, 0.0], 'rotation': [-h, 0, 0, h],
@@ -102,7 +114,7 @@ doc = {'asset': {'version': '2.0', 'generator': 'tools/make_texture_test.py'}, '
        'nodes': nodes, 'meshes': meshes, 'materials': mats,
        'images': [{'bufferView': v, 'mimeType': 'image/png'} for v in image_views],
        'samplers': [{'magFilter': 9729, 'minFilter': 9729, 'wrapS': 10497, 'wrapT': 10497}],
-       'textures': [{'sampler': 0, 'source': i} for i in range(3)],
+       'textures': [{'sampler': 0, 'source': i} for i in range(4)],
        'cameras': [{'type': 'perspective', 'perspective': {'yfov': 0.9, 'aspectRatio': 4 / 3, 'znear': 0.1, 'zfar': 100}}],
        'accessors': accessors, 'bufferViews': views, 'buffers': [{'byteLength': len(bin_data)}]}
 js = json.dumps(doc, separators=(',', ':')).encode()

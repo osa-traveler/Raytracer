@@ -217,6 +217,8 @@ struct Material {
     float ior = 1.5f;          // KHR_materials_ior (glass refraction, and the dielectric reflectance at normal incidence)
     float specular = 1.0f;     // KHR_materials_specular specularFactor: scales the dielectric reflectance (0 = no specular highlight)
     int baseColorTex = -1;     // index into Scene::textures (glTF baseColorTexture, multiplied with `base`), -1 = none
+    int normalTex = -1;        // glTF normalTexture: tangent-space normal map (+X right, +Y up in the image), -1 = none
+    float normalScale = 1.0f;  // glTF normalTexture.scale: multiplies the X and Y of the decoded normal
     int metalRoughTex = -1;    // glTF metallicRoughnessTexture: G = roughness, B = metalness (multiplied with the factors), -1 = none
     bool doubleSided = true;   // glTF doubleSided (the loader reads it, the default of the file format is false). Only used with Scene::cullBackfaces
     std::string name;
@@ -226,6 +228,8 @@ struct Triangle {
     Vec3 p0, p1, p2;
     Vec3 n0, n1, n2;
     float uv[6] = {0, 0, 0, 0, 0, 0};   // TEXCOORD_0 of the three vertices (u0, v0, u1, v1, u2, v2), glTF convention
+    Vec3 tg[3];                         // vertex tangents (world space), only for materials with a normal map
+    float tw[3] = {0, 0, 0};            // handedness of the tangent frame, +1 / -1; 0 = no tangent (no normal map)
     int material;
 };
 
@@ -237,6 +241,8 @@ struct Hit {
     Vec3 ng;            // geometric normal of the triangle, on the same side as the vertex normals
     int material = -1;
     float tu = 0, tv = 0;   // interpolated texture coordinates
+    Vec3 tg;                // interpolated tangent (not yet orthogonal to n); tw = handedness, 0 = none
+    float tw = 0;
 };
 
 struct PointLight { Vec3 pos; Vec3 color; };
@@ -326,6 +332,7 @@ struct CameraInfo {
 struct Scene {
     std::vector<Material> materials;
     std::vector<Texture> textures;        // decoded images that materials refer to by index
+    bool useNormalMaps = true;            // false: ignore normal maps (baseColor / metallicRoughness textures are unaffected)
     bool useTextures = true;              // false: ignore textures and use the material factors only (all earlier images)
     std::vector<Triangle> tris;
     std::vector<BvhNode> nodes;
@@ -521,6 +528,10 @@ struct Scene {
         float w0 = 1 - bu - bv;
         hit.tu = bt->uv[0] * w0 + bt->uv[2] * bu + bt->uv[4] * bv;
         hit.tv = bt->uv[1] * w0 + bt->uv[3] * bu + bt->uv[5] * bv;
+        if (bt->tw[0] != 0.0f) {
+            hit.tg = bt->tg[0] * w0 + bt->tg[1] * bu + bt->tg[2] * bv;
+            hit.tw = bt->tw[0] * w0 + bt->tw[1] * bu + bt->tw[2] * bv < 0 ? -1.0f : 1.0f;
+        } else hit.tw = 0.0f;
     }
 
     // True if the ray hit the back side of a one-sided triangle and cullBackfaces is on (the hit must then be ignored).
@@ -649,6 +660,28 @@ inline const Material& materialAt(const Scene& sc, const Hit& h, Material& tmp) 
     return tmp;
 }
 
+// Normal mapping: replaces the hit's shading normal by the normal stored in the material's normal map, which is given in the
+// tangent frame (t, b, n) of the surface: n' = x t + y b + z n with (x, y, z) = (r, g, b) * 2 - 1, x and y times the material's
+// scale. glTF convention: +X = the direction of increasing u, +Y = "up" in the image (decreasing v), so b = cross(n, t) * w,
+// where w (+1 / -1) was chosen at load time so that b points along -dP/dv even where the UVs are mirrored. Only the shading
+// normal changes; the geometric normal (which side is front, the silhouette, shadow-ray offsets) stays the triangle's own.
+inline void applyNormalMap(const Scene& sc, Hit& h) {
+    if (!sc.useTextures || !sc.useNormalMaps || h.tw == 0.0f) return;
+    const Material& m = sc.materials[(size_t)h.material];
+    if (m.normalTex < 0) return;
+    Vec3 c = sc.textures[m.normalTex].sample<false>(h.tu, h.tv);
+    float x = (c.x * 2 - 1) * m.normalScale, y = (c.y * 2 - 1) * m.normalScale, z = std::max(c.z * 2 - 1, 0.0f);
+    Vec3 t = h.tg - h.n * dot(h.n, h.tg);                       // the interpolated tangent, made perpendicular to the normal
+    float lt = length(t);
+    if (lt < 1e-8f) return;
+    t = t * (1.0f / lt);
+    Vec3 b = cross(h.n, t) * h.tw;
+    Vec3 np = t * x + b * y + h.n * z;
+    float l = length(np);
+    if (l < 1e-8f) return;
+    h.n = np * (1.0f / l);
+}
+
 // ---------------------------------------------------------------- glb loader
 struct Glb {
     Json json;
@@ -732,6 +765,39 @@ inline void addMesh(Scene& sc, const Glb& g, int meshIdx, const Mat4& world) {
         int mat = pr.has("material") ? pr["material"].i() : -1;
         if (mat < 0) { mat = (int)sc.materials.size(); sc.materials.push_back(Material{}); }
 
+        // Vertex tangents for normal mapping: for each triangle, dP/du and dP/dv from its UVs; summed per vertex (weighted by the
+        // triangle's area, so shared vertices get a smooth frame), made perpendicular to the vertex normal. The handedness w is
+        // +1 when cross(n, t) points along "up in the image" = -dP/dv (glTF's v runs downwards), -1 for mirrored UVs.
+        std::vector<Vec3> vtan(nv);
+        std::vector<float> vw(nv, 0.0f);
+        if (!uvs.empty() && !nrm.empty() && sc.materials[(size_t)mat].normalTex >= 0) {
+            std::vector<Vec3> ts(nv), bs(nv);
+            for (size_t i = 0; i + 2 < idx.size(); i += 3) {
+                uint32_t a = idx[i], b = idx[i + 1], c = idx[i + 2];
+                Vec3 e1 = wp[b] - wp[a], e2 = wp[c] - wp[a];
+                float du1 = uvs[b * 2] - uvs[a * 2], dv1 = uvs[b * 2 + 1] - uvs[a * 2 + 1];
+                float du2 = uvs[c * 2] - uvs[a * 2], dv2 = uvs[c * 2 + 1] - uvs[a * 2 + 1];
+                float det = du1 * dv2 - du2 * dv1;
+                if (std::fabs(det) < 1e-20f) continue;
+                Vec3 tdir = (e1 * dv2 - e2 * dv1) * (1.0f / det), bdir = (e2 * du1 - e1 * du2) * (1.0f / det);
+                float lt = length(tdir), lb = length(bdir), area = length(cross(e1, e2));
+                if (lt <= 0 || lb <= 0) continue;
+                tdir = tdir * (area / lt); bdir = bdir * (area / lb);
+                for (uint32_t v : {a, b, c}) { ts[v] += tdir; bs[v] += bdir; }
+            }
+            for (size_t i = 0; i < nv; i++) {
+                Vec3 n = wn[i], t = ts[i] - n * dot(n, ts[i]);
+                if (length(t) < 1e-12f) {                       // no usable UVs around this vertex: any tangent
+                    t = cross(n, std::fabs(n.x) < 0.9f ? Vec3(1, 0, 0) : Vec3(0, 1, 0));
+                    vtan[i] = normalize(t); vw[i] = 1.0f;
+                } else {
+                    t = normalize(t);
+                    vtan[i] = t;
+                    vw[i] = dot(cross(n, t), bs[i] * -1.0f) < 0 ? -1.0f : 1.0f;
+                }
+            }
+        }
+
         for (size_t i = 0; i + 2 < idx.size(); i += 3) {
             Triangle t;
             t.p0 = wp[idx[i]]; t.p1 = wp[idx[i + 1]]; t.p2 = wp[idx[i + 2]];
@@ -740,6 +806,7 @@ inline void addMesh(Scene& sc, const Glb& g, int meshIdx, const Mat4& world) {
             t.material = mat;
             if (!uvs.empty())
                 for (int k = 0; k < 3; k++) { t.uv[2 * k] = uvs[idx[i + k] * 2]; t.uv[2 * k + 1] = uvs[idx[i + k] * 2 + 1]; }
+            for (int k = 0; k < 3; k++) { t.tg[k] = vtan[idx[i + k]]; t.tw[k] = vw[idx[i + k]]; }
             sc.tris.push_back(t);
         }
     }
@@ -814,6 +881,10 @@ inline Scene loadScene(const std::string& path) {
             m.base = {pbr["baseColorFactor"][0].f(), pbr["baseColorFactor"][1].f(), pbr["baseColorFactor"][2].f()};
         if (pbr.has("baseColorTexture") && pbr["baseColorTexture"]["texCoord"].i(0) == 0) m.baseColorTex = textureIndex(pbr["baseColorTexture"]);
         if (pbr.has("metallicRoughnessTexture") && pbr["metallicRoughnessTexture"]["texCoord"].i(0) == 0) m.metalRoughTex = textureIndex(pbr["metallicRoughnessTexture"]);
+        if (mats[i].has("normalTexture") && mats[i]["normalTexture"]["texCoord"].i(0) == 0) {
+            m.normalTex = textureIndex(mats[i]["normalTexture"]);
+            m.normalScale = mats[i]["normalTexture"]["scale"].f(1.0f);
+        }
         if (pbr.has("metallicFactor")) m.metallic = pbr["metallicFactor"].f();
         if (pbr.has("roughnessFactor")) m.roughness = pbr["roughnessFactor"].f();
         const Json& ext = mats[i]["extensions"];
@@ -948,7 +1019,8 @@ inline Vec3 trace(const Scene& sc, const Ray& ray, int depth, Sampler& smp) {
     Hit h;
     if (!sc.intersect(ray, INF, h)) return background(ray);
     Material mtex;
-        const Material& m = materialAt(sc, h, mtex);
+    const Material& m = materialAt(sc, h, mtex);
+    applyNormalMap(sc, h);
 
     Vec3 V = -ray.d;
     bool front;
@@ -1416,6 +1488,7 @@ inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
 
         Material mtex;
         const Material& m = materialAt(sc, h, mtex);
+        applyNormalMap(sc, h);
         Vec3 V = ray.d * -1.0f;
         bool front = dot(ray.d, h.ng) < 0;
         Vec3 Ng = front ? h.ng : -h.ng;                // the side the ray came from
@@ -1507,6 +1580,7 @@ inline Vec3 pathTraceLambert(const Scene& sc, Ray ray, Sampler& smp) {
 
         Material mtex;
         const Material& m = materialAt(sc, h, mtex);
+        applyNormalMap(sc, h);
         bool front = dot(ray.d, h.ng) < 0;
         Vec3 Ng = front ? h.ng : -h.ng;                // the side the ray came from
         Vec3 N = front ? h.n : -h.n;

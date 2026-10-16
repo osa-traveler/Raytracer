@@ -58,3 +58,6 @@ experiments/2026-10-16_m7-cycles/*.exr
 # Purchased model (CGTrader), too large / licensed
 Assets/bettle/
 Scene/Test/Beetle_Room*.glb
+
+# normal-map convention check: generated glb / arrays / probe binary (run.sh regenerates them)
+experiments/2026-10-17_normal-map-convention/out/

@@ -1,7 +1,7 @@
 # Raytracer
 
 教科書の最初に出てくるような Whitted 式レイトレーサから出発して、モンテカルロ法(面光源のサンプリング)、**パストレーシング(NEE、段階描画)**まで拡張した、学習用のレイトレーサです。
-古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0〜M5、M7 完了、M8 はテクスチャまで。次は M6(フォトンマッピング)か、M8 の続き(法線マップ・HDRI))。
+古典的手法から現代の技術まで、[ロードマップ](docs/RENDERER_ROADMAP.md)に沿って、1歩ずつ実装し、画像と数値で確かめています(現在: M0〜M5、M7 完了、M8 はテクスチャ(法線マップを含む)まで。次は M6(フォトンマッピング)か、M8 の続き(HDRI・ミップマップ))。
 Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x480 で描画して、操作パネル付きのウィンドウに表示します。
 
 ![自作レイトレーサで描いた空冷ビートル(256 spp)](docs/screenshots/2026-10-17_beetle-room-rear-textured-256spp.png)
@@ -11,7 +11,7 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 ## 機能
 
 - GLB(glTF 2.0)ローダ(JSON パーサ・PNG デコーダも自前実装。外部ライブラリは SDL2 のみ)
-  - メッシュ、UV、ノード変換(TRS / matrix / 子ノード)、PBR 材質(baseColor / metallic / roughness)、**テクスチャ(baseColor、metallicRoughness。埋め込み PNG、`--no-textures` で無効化)**、`KHR_materials_transmission`、カメラ
+  - メッシュ、UV、ノード変換(TRS / matrix / 子ノード)、PBR 材質(baseColor / metallic / roughness)、**テクスチャ(baseColor、metallicRoughness、法線マップ。埋め込み PNG、`--no-textures` / `--no-normal-maps` で無効化)**、`KHR_materials_transmission`、カメラ
 - BVH による高速化(中央値分割 / SAH、近い子から先に走査、Path の影レイは any-hit。約30万三角形のシーンを、1フレーム十数 ms で描画。BVH なし(全三角形)との比較、スレッド数との関係も測定)
 - レイトレーシング
   - 拡散反射 + Blinn-Phong、**面光源(矩形をランダムにサンプリング、ソフトシャドウ)**または点光源、影(ガラスは薄い影)
@@ -24,7 +24,7 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 - モンテカルロ法: 再現性のある乱数(PCG32、ピクセルごとに独立。スレッド数によらず結果が同一)、1ピクセルのサンプル数(`--spp`)、ピクセル内のランダムな位置(ジッタ = アンチエイリアス)
 - 線形の浮動小数の film と、表示変換(露出・ガンマ)の分離。画像は PNG・PFM(線形)で保存、画像どうしの差(RMSE)を測れる
 - マルチスレッドで走査線ごとに描画し、描画の進行をウィンドウに表示
-- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(2100項目)、再現できる実験(`experiments/`)
+- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(2139項目)、再現できる実験(`experiments/`)
 
 ## ビルドと実行
 
@@ -70,7 +70,7 @@ cmake --build build-release
 
 ## シーン・アセット
 
-- `Scene/Test/TextureTest.glb`: テクスチャ読み込みの最小のテスト(市松模様の床 + metallicRoughness、128x128 の模様の壁。`tools/make_texture_test.py` で生成。すべてのフィルタ・動的 Huffman の PNG を含む)
+- `Scene/Test/TextureTest.glb`: テクスチャ読み込みの最小のテスト(市松模様の床 + metallicRoughness、128x128 の模様の壁、法線マップ付きの左右の壁。`tools/make_texture_test.py` で生成。すべてのフィルタ・動的 Huffman の PNG を含む)
 - `Scene/Test/MaterialRow.glb`: 材質の球列(`tools/make_material_row.py` で生成。金・赤いプラスチック、roughness 0.05〜1.0、ガラス球 IOR 1.2 / 1.5 / 2.4、鏡)。PBR の確認用
 - `Scene/Test/Cornell.glb`: Cornell Box(`tools/make_cornell.py` で生成。赤壁・緑壁・白い箱2個・天井の面光源)。パストレーシング(`--integrator path`)の検証用
 - `Scene/Test/Room_2Spheres.glb`: 基準シーン(部屋、金属球、ガラス球。球は部屋の中心に対称)
@@ -88,6 +88,6 @@ cmake --build build-release
 
 - [docs/WORKFLOW.md](docs/WORKFLOW.md): 進め方のルール
 - [docs/WORKLOG.md](docs/WORKLOG.md): 作業ログ
-- [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md): レンダリングの考え方の解説(spp とノイズ、パストレーシング、BSDF、NEE など。図・用語集つき)
+- [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md): レンダリングの考え方の解説(spp とノイズ、パストレーシング、BSDF、NEE、PBR、クリアコートと表面下散乱の考え方など。図・用語集つき)
 - [docs/CURRENT_IMPLEMENTATION.md](docs/CURRENT_IMPLEMENTATION.md): 現在の実装
 - [docs/RENDERER_ROADMAP.md](docs/RENDERER_ROADMAP.md): ロードマップ

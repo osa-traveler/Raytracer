@@ -198,7 +198,7 @@ Exposure / Tone mapping / sRGB / 保存・プレビュー
 
 **実装**
 - [ ] HDR環境マップによる照明と、可能なら明るさに応じたImportance Sampling。
-- [x] UV・アルベド(baseColor)・粗さ・金属度(metallicRoughness)のテクスチャの読み込み(2026-10-17。埋め込み PNG、双線形、`--no-textures`)。**未実装: 法線マップ、ミップマップ、JPEG、サンプラー、`KHR_texture_transform`、UDIM(エクスポート側でアトラス化)**。
+- [x] UV・アルベド(baseColor)・粗さ・金属度(metallicRoughness)のテクスチャの読み込み(2026-10-17。埋め込み PNG、双線形、`--no-textures`)。**法線マップ(`normalTexture`、接線は UV から自前で計算)も対応(2026-10-17。Blender の法線と、合成の法線マップで一致を確認)。未実装: ミップマップ、JPEG、サンプラー、`KHR_texture_transform`、UDIM(エクスポート側でアトラス化)**。
 - [ ] Blender → 自作レンダラーの座標系・単位・色空間・ライト設定を確認。
 - [ ] 公開モデルを複数読み込む。個々のアセットのライセンスを確認。
 

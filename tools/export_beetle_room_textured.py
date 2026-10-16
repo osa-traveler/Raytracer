@@ -6,11 +6,13 @@ Run inside Blender (Scripting tab, or the MCP execute_blender_code); the .blend 
 glTF has no UDIM tiles, and the beetle's UVs span 2 x 3 tiles (u 0..2, v 0..3: tiles 1001, 1002, 1011, 1012, 1021, 1022). So:
   * the six 4096 x 4096 tiles of each map are shrunk to 2048 x 2048 and pasted into one 4096 x 6144 atlas
     (Assets/bettle/textures/atlas/: beetle_base_atlas.png = BaseColor, beetle_mr_atlas.png = glTF packing G = roughness, B = metalness);
+    plus beetle_normal_atlas.png = the tangent-space normal maps (OpenGL convention, +Y up: what Blender's Normal Map node expects);
     the files are reused when they exist (delete them to rebuild);
   * for the export only, every textured part's UVs are divided by (2, 3) so they address the atlas, and the parts get a material
-    that reads the atlas (paint parts: the same, multiplied by the sunflower yellow). Normal maps are not exported: the renderer
-    does not read them yet. Glass (material "Vitre") is left as it is.
-Everything (UVs, materials, temporary images) is put back afterwards. The glb contains the purchased CGTrader model: git-ignored.
+    that reads the atlases (paint parts: the same, multiplied by the sunflower yellow). The renderer computes its own vertex
+    tangents from the UVs, so no TANGENT attribute is needed. Glass (material "Vitre") is left as it is.
+Everything (UVs, materials, temporary images) is put back afterwards. When this script is run with exec() from another script, give it its own
+namespace (exec(src, {})): it rebinds names such as m and old, which broke a caller once. The glb contains the purchased CGTrader model: git-ignored.
 """
 import os
 
@@ -54,6 +56,14 @@ def save_png(path, rgba):
 
 base_path = os.path.join(atlas_dir, "beetle_base_atlas.png")
 mr_path = os.path.join(atlas_dir, "beetle_mr_atlas.png")
+normal_path = os.path.join(atlas_dir, "beetle_normal_atlas.png")
+if not os.path.exists(normal_path):
+    nm = np.full((3 * T, 2 * T, 4), 255, dtype=np.float32)
+    nm[:, :, :3] = (128, 128, 255)                                    # a flat normal where a tile is missing
+    for i, j in TILES:
+        nm[j * T:(j + 1) * T, i * T:(i + 1) * T, :3] = read_tile("Normal", i, j)   # (the box filter averages the encoded vectors; the renderer renormalises)
+    save_png(normal_path, nm)
+    del nm
 if not (os.path.exists(base_path) and os.path.exists(mr_path)):
     base = np.full((3 * T, 2 * T, 4), 255, dtype=np.float32)
     mr = np.full((3 * T, 2 * T, 4), 255, dtype=np.float32)
@@ -76,6 +86,7 @@ def load_atlas(path, colorspace):
 
 img_base = load_atlas(base_path, 'sRGB')
 img_mr = load_atlas(mr_path, 'Non-Color')
+img_normal = load_atlas(normal_path, 'Non-Color')
 
 
 def atlas_material(name, tint=None):
@@ -89,6 +100,10 @@ def atlas_material(name, tint=None):
     nt.links.new(tm.outputs['Color'], sep.inputs['Color'])
     nt.links.new(sep.outputs['Green'], bsdf.inputs['Roughness'])
     nt.links.new(sep.outputs['Blue'], bsdf.inputs['Metallic'])
+    tn = nt.nodes.new('ShaderNodeTexImage'); tn.image = img_normal
+    nmap = nt.nodes.new('ShaderNodeNormalMap'); nmap.space = 'TANGENT'
+    nt.links.new(tn.outputs['Color'], nmap.inputs['Color'])
+    nt.links.new(nmap.outputs['Normal'], bsdf.inputs['Normal'])
     if tint is None:
         nt.links.new(tb.outputs['Color'], bsdf.inputs['Base Color'])
     else:
@@ -131,5 +146,5 @@ finally:
             o.data.update()
     for m in (mat_plain, mat_paint):
         bpy.data.materials.remove(m)
-    for im in (img_base, img_mr):
+    for im in (img_base, img_mr, img_normal):
         bpy.data.images.remove(im)
