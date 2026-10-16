@@ -5,6 +5,7 @@
 //
 // Options (initial values of the panel, or the settings of a headless render):
 //   --spp N  --jitter  --seed N  --threads N  --max-depth N  --exposure X  --gamma X
+//   --bsdf lambert|pbr  --no-multiscatter  --env-uniform X   (path surface model, default pbr; constant radiance for escaping rays = white furnace)
 //   --accel none|median|sah  --no-ordered  --no-any-hit   (triangle search, default SAH; nearer child first; Path shadow rays stop at the first hit. All give the same image)
 //   --integrator classic|path  --env X  --no-nee  --no-mis  --rr   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
 //   --legacy-normals   (M0 behaviour at silhouettes: reproduces the M0 baseline images bit for bit)
@@ -56,6 +57,9 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--integrator" && (v = next())) p.integrator = std::string(v) == "path" ? Integrator::Path : Integrator::Classic;
         else if (a == "--progressive") { p.progressive = true; o.progressiveSet = true; }
         else if (a == "--no-progressive") { p.progressive = false; o.progressiveSet = true; }
+        else if (a == "--bsdf" && (v = next())) p.bsdf = std::string(v) == "lambert" ? BsdfModel::Lambert : BsdfModel::Pbr;
+        else if (a == "--no-multiscatter") p.multiScatter = false;
+        else if (a == "--env-uniform" && (v = next())) p.envUniform = (float)std::atof(v);
         else if (a == "--accel" && (v = next())) p.accel = std::string(v) == "none" ? Accel::None : std::string(v) == "sah" ? Accel::Sah : Accel::Median;
         else if (a == "--ordered") p.orderedTraversal = true;
         else if (a == "--no-ordered") p.orderedTraversal = false;
@@ -97,6 +101,9 @@ static int runHeadless(const Options& opt) {
     scene.integrator = p.integrator;
     scene.envScale = p.envScale;
     scene.nee = p.nee;
+    scene.bsdfModel = p.bsdf;
+    scene.envUniform = p.envUniform;
+    scene.multiScatter = p.multiScatter;
     scene.orderedTraversal = p.orderedTraversal;
     scene.anyHitShadows = p.anyHitShadows;
     scene.setAccel(p.accel);

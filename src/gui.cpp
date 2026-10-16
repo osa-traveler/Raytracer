@@ -264,10 +264,14 @@ int runGui(const GuiOptions& opt) {
         ImGui::SliderInt("threads", &threads, 1, (int)std::max(1u, std::thread::hardware_concurrency()));
         params.threads = (unsigned)threads;
         int integratorIndex = params.integrator == Integrator::Path ? 1 : 0;
-        ImGui::Combo("integrator", &integratorIndex, "classic (Whitted)\0path tracing (M2)\0");
+        ImGui::Combo("integrator", &integratorIndex, "classic (Whitted)\0path tracing\0");
         params.integrator = integratorIndex == 1 ? Integrator::Path : Integrator::Classic;
         ImGui::SliderInt("max bounces", &params.maxDepth, 0, 16);
         ImGui::BeginDisabled(params.integrator != Integrator::Path);
+        int bsdfIndex = params.bsdf == BsdfModel::Pbr ? 1 : 0;
+        ImGui::Combo("surface model (path)", &bsdfIndex, "Lambert (diffuse only)\0PBR (metal / rough / glass)\0");
+        params.bsdf = bsdfIndex == 1 ? BsdfModel::Pbr : BsdfModel::Lambert;
+        ImGui::Checkbox("multiple scattering (rough metal)", &params.multiScatter);
         ImGui::Checkbox("next event estimation (NEE)", &params.nee);
         ImGui::BeginDisabled(!params.nee);
         ImGui::Checkbox("multiple importance sampling (MIS)", &params.mis);
@@ -343,7 +347,7 @@ int runGui(const GuiOptions& opt) {
             const RenderParams cur = job.params();
             const bool changed = params.jitter != cur.jitter || (uint64_t)std::max(0, seedInput) != cur.seed || params.threads != cur.threads ||
                                  params.maxDepth != cur.maxDepth || params.lightMode != cur.lightMode || params.lightSize != cur.lightSize ||
-                                 params.legacyNormals != cur.legacyNormals || params.integrator != cur.integrator || params.nee != cur.nee || params.accel != cur.accel || params.orderedTraversal != cur.orderedTraversal || params.anyHitShadows != cur.anyHitShadows || params.mis != cur.mis || params.russianRoulette != cur.russianRoulette ||
+                                 params.legacyNormals != cur.legacyNormals || params.integrator != cur.integrator || params.nee != cur.nee || params.multiScatter != cur.multiScatter || params.bsdf != cur.bsdf || params.accel != cur.accel || params.orderedTraversal != cur.orderedTraversal || params.anyHitShadows != cur.anyHitShadows || params.mis != cur.mis || params.russianRoulette != cur.russianRoulette ||
                                  params.envScale != cur.envScale || params.progressive != cur.progressive;
             if (changed) pendingRestart = true;
         }

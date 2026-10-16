@@ -1223,6 +1223,320 @@ TEST(set_accel_rebuilds_only_when_needed) {
     CHECK(sc.nodes.size() == nodesMedian);
 }
 
+// ---------------------------------------------------------------- M7: PBR surface model
+// Integral of fn(w) over the upper hemisphere (midpoint rule in theta, phi).
+template <class Fn> static double integrateHemisphere(Fn fn, int nt = 400, int np = 400) {
+    double sum = 0;
+    for (int i = 0; i < nt; i++) {
+        double th = (i + 0.5) / nt * 1.5707963267948966, st = std::sin(th), ct = std::cos(th);
+        for (int j = 0; j < np; j++) {
+            double ph = (j + 0.5) / np * 6.283185307179586;
+            sum += fn(Vec3((float)(st * std::cos(ph)), (float)(st * std::sin(ph)), (float)ct)) * st;
+        }
+    }
+    return sum * (1.5707963267948966 / nt) * (6.283185307179586 / np);
+}
+static Vec3 localDir(double thetaDeg) { double t = thetaDeg * 3.14159265358979 / 180; return Vec3((float)std::sin(t), 0, (float)std::cos(t)); }
+
+static Material pbrMat(Vec3 base, float metallic, float roughness, float transmission = 0, float specular = 1, float ior = 1.5f) {
+    Material m; m.base = base; m.metallic = metallic; m.roughness = roughness; m.transmission = transmission; m.specular = specular; m.ior = ior; return m;
+}
+
+TEST(fresnel_matches_known_values) {
+    CHECK_NEAR(fresnelDielectric(1.0f, 1.5f), 0.04, 1e-4);                    // ((n-1)/(n+1))^2 at normal incidence
+    CHECK(fresnelDielectric(0.001f, 1.5f) > 0.99f);                           // grazing: everything is reflected
+    CHECK(fresnelDielectric(0.3f, 1.0f / 1.5f) == 1.0f);                       // total internal reflection (inside glass, steep)
+    CHECK(fresnelDielectric(1.0f, 1.0f / 1.5f) > 0.039f && fresnelDielectric(1.0f, 1.0f / 1.5f) < 0.041f);   // same 4% from inside, head on
+    for (float c = 0.05f; c <= 1.0f; c += 0.05f)                               // Schlick follows the exact curve (outside, n = 1.5)
+        CHECK(std::fabs(schlickScalar(0.04f, c) - fresnelDielectric(c, 1.5f)) < 0.04f);      // Schlick is an approximation: up to 0.035 off near 84 degrees
+    CHECK_NEAR(schlickScalar(0.04f, 1.0f), 0.04, 1e-6); CHECK_NEAR(schlickScalar(0.04f, 0.0f), 1.0, 1e-6);
+}
+
+TEST(refraction_follows_snells_law) {
+    Vec3 N(0, 1, 0);
+    for (double deg : {0.0, 20.0, 45.0, 70.0}) {
+        double t = deg * 3.14159265358979 / 180;
+        Vec3 d((float)std::sin(t), (float)-std::cos(t), 0);                               // coming down onto the surface
+        Vec3 r;
+        CHECK(refractDirection(d, N, 1.0f / 1.5f, r));                                  // air -> glass
+        CHECK_NEAR(length(r), 1.0, 1e-5);
+        CHECK_NEAR(std::sin(t), 1.5 * std::sqrt(r.x * r.x), 1e-5);                       // n1 sin(theta1) = n2 sin(theta2)
+        CHECK(r.y < 0 && r.z == 0);                                                      // goes on through the surface, stays in the plane of incidence
+    }
+    // leaving glass at a steep angle: total internal reflection (critical angle asin(1/1.5) = 41.8 degrees)
+    Vec3 steep((float)std::sin(0.9), (float)-std::cos(0.9), 0), shallow((float)std::sin(0.6), (float)-std::cos(0.6), 0), out;
+    CHECK(!refractDirection(steep, N, 1.5f, out));
+    CHECK(refractDirection(shallow, N, 1.5f, out));
+    // a slab: down through one face and out of the parallel one gives the original direction back
+    Vec3 d((float)std::sin(0.7), (float)-std::cos(0.7), 0), inside, exit;
+    CHECK(refractDirection(d, N, 1.0f / 1.5f, inside));
+    CHECK(refractDirection(inside, Vec3(0, 1, 0), 1.5f, exit));                          // the bottom face has the same normal direction facing the ray
+    CHECK_NEAR(exit.x, d.x, 1e-5); CHECK_NEAR(exit.y, d.y, 1e-5);
+}
+
+TEST(ggx_distribution_is_normalised_and_shadowing_is_sane) {
+    for (float alpha : {0.15f, 0.3f, 0.6f, 1.0f}) {
+        double n = integrateHemisphere([&](const Vec3& h) { return ggxD(h.z, alpha) * h.z; }, 1200, 8);
+        CHECK_NEAR(n, 1.0, 0.02);                                                       // the integral of D(h) cos(theta_h) over the hemisphere is 1
+        CHECK_NEAR(ggxG1(1.0f, alpha), 1.0, 1e-6);
+        float prev = 1.0f;
+        for (float c = 0.9f; c > 0.02f; c -= 0.1f) { float g = ggxG1(c, alpha); CHECK(g <= prev + 1e-6f && g > 0); prev = g; }   // more shadowing near grazing
+        CHECK(ggxG2(0.7f, 0.6f, alpha) <= std::min(ggxG1(0.7f, alpha), ggxG1(0.6f, alpha)) + 1e-6f);
+    }
+}
+
+TEST(visible_normal_sampling_matches_its_pdf) {
+    // The density of the sampled reflected direction must integrate to the fraction of samples that stay above the surface.
+    for (float alpha : {0.25f, 0.5f, 1.0f}) for (double theta : {0.0, 45.0, 75.0}) {
+        PbrBsdf b = PbrBsdf::make(pbrMat({1, 1, 1}, 1, std::sqrt(alpha)));            // metal: only the GGX lobe
+        Vec3 wo = localDir(theta);
+        double pdfIntegral = integrateHemisphere([&](const Vec3& wi) { return b.pdf(wo, wi); });
+        Sampler smp(3, 0, 0);
+        int valid = 0, n = 200000;
+        for (int i = 0; i < n; i++) { float uLobe = smp.next1D(), u1 = smp.next1D(), u2 = smp.next1D(); valid += b.sample(wo, uLobe, u1, u2).valid; }
+        CHECK_NEAR(pdfIntegral, (double)valid / n, 0.01);
+    }
+}
+
+TEST(sampling_weights_agree_with_a_quadrature_of_the_bsdf_and_never_exceed_one) {
+    struct Case { Vec3 base; float metallic, roughness; };
+    for (Case c : {Case{{0.8f, 0.8f, 0.8f}, 0.0f, 0.5f}, Case{{0.9f, 0.5f, 0.2f}, 1.0f, 0.4f}, Case{{0.7f, 0.1f, 0.1f}, 0.0f, 0.8f}, Case{{1, 1, 1}, 1.0f, 0.3f}})
+        for (double theta : {0.0, 40.0, 70.0}) {
+            PbrBsdf b = PbrBsdf::make(pbrMat(c.base, c.metallic, c.roughness));
+            Vec3 wo = localDir(theta);
+            Vec3 quad;
+            quad.x = (float)integrateHemisphere([&](const Vec3& wi) { return b.eval(wo, wi).x * wi.z; });
+            quad.y = (float)integrateHemisphere([&](const Vec3& wi) { return b.eval(wo, wi).y * wi.z; });
+            quad.z = (float)integrateHemisphere([&](const Vec3& wi) { return b.eval(wo, wi).z * wi.z; });
+            Sampler smp(4, 0, 0);
+            Vec3 mc(0, 0, 0); const int n = 300000;
+            for (int i = 0; i < n; i++) { float uLobe = smp.next1D(), u1 = smp.next1D(), u2 = smp.next1D(); BsdfSample s = b.sample(wo, uLobe, u1, u2); if (s.valid) mc += s.weight; }
+            mc = mc * (1.0f / n);
+            CHECK_NEAR(mc.x, quad.x, 0.012); CHECK_NEAR(mc.y, quad.y, 0.012); CHECK_NEAR(mc.z, quad.z, 0.012);      // same albedo both ways
+            CHECK(mc.x < 1.01f && mc.y < 1.01f && mc.z < 1.01f);                                                  // no energy is created
+        }
+}
+
+TEST(diffuse_plus_specular_never_exceed_an_albedo_of_one_at_any_angle) {
+    // The glTF form (1 - F(wo.h)) * diffuse + specular reaches 1.4 at grazing angles; the coupling through Es(mu) must not.
+    for (float rough : {0.1f, 0.2f, 0.3f, 0.5f, 0.8f, 1.0f}) for (float spec : {1.0f, 0.5f}) {
+        PbrBsdf b = PbrBsdf::make(pbrMat({1, 1, 1}, 0.0f, rough, 0, spec));
+        double maxAlbedo = 0;
+        for (int deg = 0; deg <= 87; deg += 6) {
+            Vec3 wo = localDir(deg);
+            maxAlbedo = std::max(maxAlbedo, integrateHemisphere([&](const Vec3& wi) { return b.eval(wo, wi).y * wi.z; }, 500, 500));
+        }
+        CHECK(maxAlbedo < 1.005);
+        CHECK(maxAlbedo > 0.95);                                              // and (for a white base) almost no light is lost either
+    }
+    PbrBsdf matte = PbrBsdf::make(pbrMat({0.6f, 0.6f, 0.6f}, 0.0f, 0.5f, 0, 0.0f));         // no specular at all: exactly Lambert, albedo = base colour
+    CHECK_NEAR(integrateHemisphere([&](const Vec3& wi) { return matte.eval(localDir(50), wi).y * wi.z; }), 0.6, 0.002);
+}
+
+TEST(pbr_bsdf_is_reciprocal) {
+    Sampler smp(5, 0, 0);
+    for (Material m : {pbrMat({0.8f, 0.6f, 0.3f}, 0.0f, 0.4f), pbrMat({0.9f, 0.8f, 0.7f}, 1.0f, 0.25f), pbrMat({0.5f, 0.5f, 0.5f}, 0.5f, 0.9f)}) {
+        PbrBsdf b = PbrBsdf::make(m);
+        for (int i = 0; i < 200; i++) {
+            Vec3 a = normalize(Vec3(smp.next1D() * 2 - 1, smp.next1D() * 2 - 1, 0.05f + smp.next1D())), c = normalize(Vec3(smp.next1D() * 2 - 1, smp.next1D() * 2 - 1, 0.05f + smp.next1D()));
+            Vec3 f1 = b.eval(a, c), f2 = b.eval(c, a);
+            CHECK_NEAR(f1.x, f2.x, 1e-4 * (1 + f1.x)); CHECK_NEAR(f1.y, f2.y, 1e-4 * (1 + f1.y));
+        }
+    }
+}
+
+TEST(material_parameters_select_the_lobes) {
+    PbrBsdf metal = PbrBsdf::make(pbrMat({0.9f, 0.5f, 0.2f}, 1.0f, 0.4f));
+    CHECK(metal.diffuseColor.x == 0 && !metal.specDelta);                                  // a metal has no diffuse part ...
+    CHECK(metal.fms.x > 0 && metal.pSpec < 0.96f && metal.pSpec > 0.3f);                  // ... but a multiple-scattering lobe, sampled like the diffuse one
+    PbrBsdf metalSingle = PbrBsdf::make(pbrMat({0.9f, 0.5f, 0.2f}, 1.0f, 0.4f), false);
+    CHECK(metalSingle.fms.x == 0 && metalSingle.pSpec == 1.0f);                           // without compensation: the specular lobe only
+    PbrBsdf matte = PbrBsdf::make(pbrMat({0.5f, 0.5f, 0.5f}, 0.0f, 0.5f, 0, 0.0f));         // specularFactor 0 (as Blender's Blue_Mat)
+    CHECK(matte.pSpec == 0.0f);
+    PbrBsdf plastic = PbrBsdf::make(pbrMat({0.5f, 0.5f, 0.5f}, 0.0f, 0.5f));
+    CHECK_NEAR(plastic.dielF0, 0.04, 1e-4); CHECK(plastic.pSpec > 0.05f && plastic.pSpec < 0.95f);
+    PbrBsdf diamondish = PbrBsdf::make(pbrMat({0.5f, 0.5f, 0.5f}, 0.0f, 0.5f, 0, 1.0f, 2.4f));
+    CHECK(diamondish.dielF0 > 0.16f);                                                        // ior 2.4 reflects more at normal incidence
+    CHECK(PbrBsdf::make(pbrMat({1, 1, 1}, 1, 0.0f)).specDelta);                              // roughness 0: a mirror (delta lobe)
+    CHECK(PbrBsdf::make(pbrMat({1, 1, 1}, 1, 0.03f)).specDelta);                             // alpha < 1e-3
+    CHECK(!PbrBsdf::make(pbrMat({1, 1, 1}, 1, 0.05f)).specDelta);                            // the Room scene's metal sphere stays a (very sharp) lobe
+}
+
+TEST(gltf_ior_and_specular_are_read) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Untitled.glb");
+    bool foundBlue = false, foundGlass = false;
+    for (const Material& m : sc.materials) {
+        if (m.name == "Blue_Mat") { foundBlue = true; CHECK(m.specular == 0.0f); CHECK_NEAR(m.ior, 1.5, 1e-6); }     // KHR_materials_specular
+        if (m.name == "Glass_Mat") { foundGlass = true; CHECK(m.transmission == 1.0f && m.roughness == 0.0f); }
+    }
+    CHECK(foundBlue && foundGlass);
+}
+
+static Scene furnaceSphere(const Material& m) {
+    Scene sc;
+    sc.materials = {m};
+    addSphere(sc, Vec3(0, 0, 0), 1.0f, 0, 64, 32);
+    sc.buildBvh();
+    sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr;
+    sc.envUniform = 1.0f; sc.nee = false; sc.maxDepth = 40;
+    return sc;
+}
+static double furnaceMean(const Scene& sc, int n = 40000) {
+    double sum = 0; Sampler smp(8, 0, 0);
+    std::mt19937 rng(3); std::uniform_real_distribution<float> off(-0.8f, 0.8f);
+    for (int i = 0; i < n; i++) {
+        Ray r{{off(rng), off(rng), 5.0f}, {0, 0, -1}};
+        Sampler s(8, 1, (uint32_t)i);
+        sum += pathTracePbr(sc, r, s).y;
+    }
+    return sum / n;
+}
+
+TEST(white_furnace_smooth_glass_and_mirror_conserve_energy_exactly) {
+    CHECK_NEAR(furnaceMean(furnaceSphere(pbrMat({1, 1, 1}, 0, 0.0f, 1.0f))), 1.0, 0.02);                 // glass: reflect with F, refract with 1 - F
+    CHECK_NEAR(furnaceMean(furnaceSphere(pbrMat({1, 1, 1}, 0, 0.0f, 1.0f, 1.0f, 1.9f))), 1.0, 0.02);     // another index of refraction
+    CHECK_NEAR(furnaceMean(furnaceSphere(pbrMat({1, 1, 1}, 1, 0.0f))), 1.0, 1e-3);                       // perfect white mirror
+    double dim = furnaceMean(furnaceSphere(pbrMat({0.5f, 0.5f, 0.5f}, 1, 0.0f)));                         // grey mirror: F0 = 0.5 at the centre
+    CHECK(dim < 0.9 && dim > 0.5);
+}
+
+TEST(multiple_scattering_puts_back_the_energy_a_rough_metal_loses) {
+    // Single-scattering GGX loses 35% (roughness 0.75) and 61% (1.0) of a white metal's light; the compensation restores it.
+    for (float r : {0.5f, 0.75f, 1.0f}) {
+        Scene off = furnaceSphere(pbrMat({1, 1, 1}, 1, r)); off.multiScatter = false;
+        Scene on = furnaceSphere(pbrMat({1, 1, 1}, 1, r)); on.multiScatter = true;
+        double lossy = furnaceMean(off), restored = furnaceMean(on);
+        CHECK(lossy < (r < 0.6f ? 0.93 : 0.7));
+        CHECK(restored > 0.97 && restored < 1.01);
+        // the same holds for the directional albedo, at every angle
+        PbrBsdf b = PbrBsdf::make(pbrMat({1, 1, 1}, 1, r));
+        for (int deg = 0; deg <= 80; deg += 10) {
+            Vec3 wo = localDir(deg);
+            double a = integrateHemisphere([&](const Vec3& wi) { return b.eval(wo, wi).y * wi.z; }, 500, 500);
+            CHECK(a < 1.01 && a > 0.93);
+        }
+    }
+    // a coloured metal keeps its colour (the compensated light is tinted by F^2: more saturated, not brighter than F)
+    PbrBsdf gold = PbrBsdf::make(pbrMat({1.0f, 0.78f, 0.34f}, 1.0f, 1.0f));
+    Vec3 wo = localDir(30);
+    Vec3 a(0, 0, 0);
+    a.x = (float)integrateHemisphere([&](const Vec3& wi) { return gold.eval(wo, wi).x * wi.z; }, 500, 500);
+    a.z = (float)integrateHemisphere([&](const Vec3& wi) { return gold.eval(wo, wi).z * wi.z; }, 500, 500);
+    CHECK(a.x < 1.01f && a.z < 0.6f && a.x > a.z);
+}
+
+TEST(white_furnace_rough_surfaces_never_create_energy) {
+    for (float r : {0.2f, 0.5f, 1.0f}) {
+        double metal = furnaceMean(furnaceSphere(pbrMat({1, 1, 1}, 1, r)));
+        CHECK(metal <= 1.01);                                                  // single-scattering GGX loses energy (light that would bounce again between
+        CHECK(metal > (r < 0.3f ? 0.95 : r < 0.7f ? 0.85 : 0.3));              // microfacets): about 1% at roughness 0.2, 11% at 0.5, 61% at 1.0 (measured). It never gains.
+        double plastic = furnaceMean(furnaceSphere(pbrMat({1, 1, 1}, 0, r)));
+        CHECK(plastic <= 1.01 && plastic > 0.85);
+    }
+}
+
+TEST(light_seen_through_a_glass_slab_is_displaced_by_refraction_and_dimmed_by_fresnel) {
+    // A slab (faces z = 0 and z = -0.5, outward normals +z and -z) and a small light 3 units behind it. A ray at 50 degrees is
+    // shifted sideways by the slab, so only the correctly refracted ray reaches the light; the unrefracted line misses it.
+    Scene sc;
+    sc.materials = {pbrMat({1, 1, 1}, 0.0f, 0.0f, 1.0f)};
+    auto quad = [&](float z, float nz) {
+        for (int k = 0; k < 2; k++) {
+            Triangle t = k == 0 ? makeTri({-30, -30, z}, {30, -30, z}, {30, 30, z}) : makeTri({-30, -30, z}, {30, 30, z}, {-30, 30, z});
+            t.n0 = t.n1 = t.n2 = Vec3(0, 0, nz);
+            sc.tris.push_back(t);
+        }
+    };
+    quad(0.0f, 1.0f); quad(-0.5f, -1.0f);
+    const double th = 50.0 * 3.14159265358979 / 180, thT = std::asin(std::sin(th) / 1.5);
+    const double xLight = 2.0 * std::tan(th) + 0.5 * std::tan(thT) + 2.5 * std::tan(th);       // where the refracted ray arrives at z = -3
+    AreaLight a; a.valid = true; a.center = Vec3((float)xLight, 0, -3.0f); a.edgeU = Vec3(0.2f, 0, 0); a.edgeV = Vec3(0, 0.2f, 0);
+    a.normal = Vec3(0, 0, 1); a.area = 0.04f; a.radiance = 3.0f;
+    sc.area = sc.areaFile = a;
+    sc.buildBvh();
+    sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr; sc.maxDepth = 6; sc.nee = true; sc.mis = true;
+    Vec3 dir((float)std::sin(th), 0, (float)-std::cos(th));
+    double F = fresnelDielectric((float)std::cos(th), 1.5f);
+    double m, se;
+    meanAndSe(sc, Ray{{0, 0, 2.0f}, dir}, 200000, m, se);
+    CHECK_NEAR(m, 3.0 * (1 - F) * (1 - F), 0.03 * 3.0);                                  // Le * T^2 (the multiply reflected paths arrive elsewhere)
+    Scene shifted = sc;                                                                     // aim at where the UNrefracted line would hit the light
+    shifted.area.center.x = (float)(2.0 * std::tan(th) + 3.0 * 0 + 5.0 * std::tan(th));
+    shifted.areaFile = shifted.area;
+    meanAndSe(shifted, Ray{{0, 0, 2.0f}, dir}, 100000, m, se);
+    CHECK_NEAR(m, 0.0, 1e-9);                                                               // a wrong refraction direction would have found it
+}
+
+TEST(a_mirror_shows_the_light_with_full_weight_whatever_the_light_sampling_mode) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    sc.materials[0] = pbrMat({0.73f, 0.73f, 0.73f}, 1.0f, 0.0f);              // the floor (and ceiling, back wall, boxes) becomes a mirror
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr; sc.maxDepth = 3;
+    Ray r{{0, 1.0f, 0}, {0, -1, 0}};                                           // straight down onto the floor, back up into the light
+    for (int mode = 0; mode < 3; mode++) {
+        sc.nee = mode > 0; sc.mis = mode == 2;
+        Sampler smp(1, 0, 0);
+        Vec3 L = pathTracePbr(sc, r, smp);
+        CHECK_NEAR(L.x, 0.73 * sc.area.radiance, 1e-3 * sc.area.radiance);     // F(0) = base colour; the emitter counts once, with weight 1
+    }
+}
+
+TEST(plain_nee_and_mis_agree_for_glossy_surfaces_and_for_light_seen_through_glass) {
+    for (int scenario = 0; scenario < 4; scenario++) {
+        Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+        configureLight(sc, LightMode::Area, 1.5f);
+        sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr;
+        if (scenario == 0) sc.materials[0] = pbrMat({0.8f, 0.8f, 0.8f}, 0.0f, 0.3f);          // glossy plastic
+        if (scenario == 1) sc.materials[0] = pbrMat({0.9f, 0.7f, 0.4f}, 1.0f, 0.15f);         // sharp metal
+        if (scenario == 2) sc.materials[0] = pbrMat({0.9f, 0.9f, 0.9f}, 1.0f, 0.6f);          // rough metal
+        if (scenario == 3) {                                                                  // a glass ball on the floor
+            int glass = (int)sc.materials.size();
+            sc.materials.push_back(pbrMat({1, 1, 1}, 0.0f, 0.0f, 1.0f));
+            addSphere(sc, Vec3(0.0f, 0.45f, 0.1f), 0.4f, glass, 48, 24);
+            sc.buildBvh();
+        }
+        Camera cam = makeCamera(sc);
+        for (Ray r : {cam.ray(WIDTH / 2.0f, HEIGHT * 0.88f), cam.ray(WIDTH * 0.45f, HEIGHT * 0.62f), cam.ray(WIDTH * 0.8f, HEIGHT * 0.3f)}) {
+            for (int depth : {2, 5}) {
+                sc.maxDepth = depth;
+                double m[3], se[3];
+                sc.nee = false; sc.mis = false; meanAndSe(sc, r, 50000, m[0], se[0]);
+                sc.nee = true;  sc.mis = false; meanAndSe(sc, r, 50000, m[1], se[1]);
+                sc.nee = true;  sc.mis = true;  meanAndSe(sc, r, 50000, m[2], se[2]);
+                for (int a = 0; a < 3; a++) for (int b = a + 1; b < 3; b++)
+                    CHECK(std::fabs(m[a] - m[b]) < 5 * std::sqrt(se[a] * se[a] + se[b] * se[b]) + 1e-4);
+            }
+        }
+    }
+}
+
+TEST(pbr_without_specular_has_the_expectation_of_the_lambert_model) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Cornell.glb");
+    configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.maxDepth = 3;
+    for (Material& m : sc.materials) { m.specular = 0.0f; m.metallic = 0.0f; }               // matte: the PBR model reduces to the diffuse lobe
+    Camera cam = makeCamera(sc);
+    for (Ray r : {cam.ray(WIDTH / 2.0f, HEIGHT * 0.9f), cam.ray(WIDTH * 0.2f, HEIGHT * 0.5f)}) {
+        double ml, sl, mp, sp;
+        sc.bsdfModel = BsdfModel::Lambert; meanAndSe(sc, r, 60000, ml, sl);
+        sc.bsdfModel = BsdfModel::Pbr;     meanAndSe(sc, r, 60000, mp, sp);
+        CHECK(std::fabs(ml - mp) < 5 * std::sqrt(sl * sl + sp * sp) + 1e-4);
+    }
+}
+
+TEST(pbr_render_is_deterministic_and_independent_of_threads) {
+    Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/Room_2Spheres.glb");
+    applyDefaultLighting(sc); configureLight(sc, LightMode::Area, 0);
+    sc.integrator = Integrator::Path; sc.bsdfModel = BsdfModel::Pbr; sc.maxDepth = 5; sc.envScale = 1.0f;
+    Camera cam = makeCamera(sc);
+    RenderSettings rs; rs.spp = 1; rs.jitter = true; rs.seed = 3;
+    Film a(WIDTH, HEIGHT), b(WIDTH, HEIGHT);
+    Stats st;
+    rs.threads = 1; renderFrame(sc, cam, a, rs, nullptr, nullptr, st);
+    rs.threads = 5; renderFrame(sc, cam, b, rs, nullptr, nullptr, st);
+    CHECK(sameFilm(a, b));
+}
+
 int main() {
     for (auto& c : tests()) {
         int before = g_failed;

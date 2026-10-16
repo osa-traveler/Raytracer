@@ -41,7 +41,8 @@ inline void writeRunConfig(const std::string& path, const RenderParams& p, const
     std::fprintf(f, "  \"russian_roulette\": %s,\n", scene.russianRoulette ? "true" : "false");
     if (scene.russianRoulette)
         std::fprintf(f, "  \"russian_roulette_rule\": \"from bounce %d, survival p = largest throughput component clamped to [0.05, 0.95], throughput / p\",\n", scene.rrStartDepth);
-    std::fprintf(f, "  \"environment_scale\": %g,\n", scene.envScale);
+    std::fprintf(f, "  \"surface_model\": \"%s\",\n", scene.bsdfModel == BsdfModel::Pbr ? scene.multiScatter ? "pbr (glTF metallic-roughness: diffuse + GGX with multiple-scattering compensation, mirror and smooth glass as delta lobes)" : "pbr (glTF metallic-roughness: diffuse + single-scattering GGX, mirror and smooth glass as delta lobes)" : "lambert (diffuse only)");
+    std::fprintf(f, "  \"environment_scale\": %g,\n  \"environment_uniform\": %g,\n", scene.envScale, scene.envUniform);
     std::fprintf(f, "  \"max_depth\": %d,\n", scene.maxDepth);
     std::fprintf(f, "  \"silhouette_normals\": \"%s\",\n", scene.legacyNormals ? "legacy (M0: flip the interpolated normal)" : "geometric facing + clamp");
     std::fprintf(f, "  \"threads\": %u,\n", p.threads);

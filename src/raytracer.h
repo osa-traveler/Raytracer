@@ -189,6 +189,8 @@ struct Material {
     float metallic = 1.0f;     // glTF default
     float roughness = 1.0f;    // glTF default
     float transmission = 0.0f;
+    float ior = 1.5f;          // KHR_materials_ior (glass refraction, and the dielectric reflectance at normal incidence)
+    float specular = 1.0f;     // KHR_materials_specular specularFactor: scales the dielectric reflectance (0 = no specular highlight)
     std::string name;
 };
 
@@ -264,6 +266,12 @@ enum class Integrator { Classic, Path };
 //   Sah:    BVH, each node split where the surface area heuristic (binned) estimates the cheapest traversal.
 enum class Accel { None, Median, Sah };
 
+// Surface model of the path tracer (the Classic integrator has its own shading).
+//   Lambert: every surface is diffuse (M2); metallic / roughness / transmission are ignored.
+//   Pbr:     glTF metallic-roughness: Lambert diffuse * (1 - Fresnel) + GGX microfacet specular, mirrors and smooth glass as
+//            delta lobes (M7).
+enum class BsdfModel { Lambert, Pbr };
+
 // Rectangular area light, defined in the glb by a node named after the Blender light plus custom properties
 // (exported as glTF "extras"): rt_light_type = "rect", rt_size_x, rt_size_y (metres), rt_radiance.
 // Blender's own light settings are not exported to glTF (AREA lights are unsupported), so these properties
@@ -307,6 +315,9 @@ struct Scene {
     bool legacyNormals = false;
     int maxDepth = MAX_DEPTH;   // reflection/refraction recursion limit (runtime setting); number of bounces in Path mode
     Integrator integrator = Integrator::Classic;
+    BsdfModel bsdfModel = BsdfModel::Lambert;   // legacy default: the earlier experiments are reproduced bit for bit; the app asks for Pbr
+    bool multiScatter = true;   // Pbr: put back the light single-scattering GGX loses between microfacets (Kulla-Conty)
+    float envUniform = -1.0f;   // Path mode, >= 0: rays that escape see this constant radiance (a white furnace for tests); < 0 = off
     bool nee = true;            // Path mode: next event estimation (direct light sampled at every vertex)
     bool mis = true;            // Path mode, with nee: combine light sampling and BSDF sampling (power heuristic)
     bool russianRoulette = false;   // Path mode: end paths at random after rrStartDepth bounces (unbiased, maxDepth stays a hard cap)
@@ -713,6 +724,8 @@ inline Scene loadScene(const std::string& path) {
         if (pbr.has("roughnessFactor")) m.roughness = pbr["roughnessFactor"].f();
         const Json& ext = mats[i]["extensions"];
         if (ext.has("KHR_materials_transmission")) m.transmission = ext["KHR_materials_transmission"]["transmissionFactor"].f(0);
+        if (ext.has("KHR_materials_ior")) m.ior = ext["KHR_materials_ior"]["ior"].f(1.5f);
+        if (ext.has("KHR_materials_specular")) m.specular = ext["KHR_materials_specular"]["specularFactor"].f(1.0f);
         sc.materials.push_back(m);
     }
     int sceneIdx = g.json.has("scene") ? g.json["scene"].i() : 0;
@@ -974,6 +987,386 @@ inline Vec3 sampleDirectLight(const Scene& sc, const Vec3& x, const Vec3& N, con
     return albedo * (a.radiance * pdfBsdf / pdfLight * weight);
 }
 
+// ---------------------------------------------------------------- PBR surface model (M7)
+// Orthonormal basis around a (shading) normal, to work with directions in a local frame where the normal is +z.
+struct Frame {
+    Vec3 t, b, n;
+    explicit Frame(const Vec3& normal) {
+        n = normal;
+        Vec3 a = std::fabs(n.x) > 0.9f ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+        t = normalize(cross(a, n));
+        b = cross(n, t);
+    }
+    Vec3 toLocal(const Vec3& v) const { return Vec3(dot(v, t), dot(v, b), dot(v, n)); }
+    Vec3 toWorld(const Vec3& v) const { return t * v.x + b * v.y + n * v.z; }
+};
+
+constexpr float kPi = 3.14159265358979f, kInvPi = 1.0f / 3.14159265358979f;
+
+// Schlick's approximation of the Fresnel reflectance: f0 + (f90 - f0) (1 - cos)^5 (f90 = reflectance at grazing angles).
+inline float schlickScalar(float f0, float cosTheta, float f90 = 1.0f) {
+    float m = 1.0f - std::min(1.0f, std::max(0.0f, cosTheta)), m2 = m * m;
+    return f0 + (f90 - f0) * m2 * m2 * m;
+}
+inline Vec3 schlickColor(const Vec3& f0, float cosTheta, float f90 = 1.0f) {
+    float m = 1.0f - std::min(1.0f, std::max(0.0f, cosTheta)), m2 = m * m, k = m2 * m2 * m;
+    return f0 + (Vec3(f90, f90, f90) - f0) * k;
+}
+
+// Exact (unpolarised) Fresnel reflectance of a smooth dielectric interface. cosI = cos of the angle of incidence (> 0),
+// eta = n_transmitted / n_incident. Returns 1 for total internal reflection.
+inline float fresnelDielectric(float cosI, float eta) {
+    cosI = std::min(1.0f, std::max(0.0f, cosI));
+    float sin2T = (1.0f - cosI * cosI) / (eta * eta);
+    if (sin2T >= 1.0f) return 1.0f;
+    float cosT = std::sqrt(1.0f - sin2T);
+    float rs = (cosI - eta * cosT) / (cosI + eta * cosT), rp = (eta * cosI - cosT) / (eta * cosI + cosT);
+    return 0.5f * (rs * rs + rp * rp);
+}
+
+// Refracted direction of the unit direction d (pointing along the ray) at an interface with unit normal N facing the ray
+// (dot(N, d) < 0). eta = n_incident / n_transmitted. Returns false on total internal reflection.
+inline bool refractDirection(const Vec3& d, const Vec3& N, float eta, Vec3& out) {
+    float cosI = -dot(N, d);
+    float cosT2 = 1.0f - eta * eta * (1.0f - cosI * cosI);
+    if (cosT2 < 0.0f) return false;
+    out = normalize(d * eta + N * (eta * cosI - std::sqrt(cosT2)));
+    return true;
+}
+
+// GGX / Trowbridge-Reitz microfacet distribution (isotropic, alpha = roughness^2). D is per unit solid angle of the
+// microfacet normal, so that the integral of D(h) cos(theta_h) over the hemisphere is 1.
+inline float ggxD(float cosH, float alpha) {
+    float a2 = alpha * alpha, d = cosH * cosH * (a2 - 1.0f) + 1.0f;
+    return a2 / (kPi * d * d);
+}
+// Smith shadowing-masking: Lambda(w) = (sqrt(1 + alpha^2 tan^2(theta)) - 1) / 2, G1 = 1 / (1 + Lambda), and the
+// height-correlated G2 = 1 / (1 + Lambda_o + Lambda_i).
+inline float ggxLambda(float cosT, float alpha) {
+    float c2 = cosT * cosT, t2 = (1.0f - c2) / std::max(c2, 1e-12f);
+    return 0.5f * (std::sqrt(1.0f + alpha * alpha * t2) - 1.0f);
+}
+inline float ggxG1(float cosT, float alpha) { return 1.0f / (1.0f + ggxLambda(cosT, alpha)); }
+inline float ggxG2(float cosO, float cosI, float alpha) { return 1.0f / (1.0f + ggxLambda(cosO, alpha) + ggxLambda(cosI, alpha)); }
+
+// Samples a microfacet normal from the distribution of normals VISIBLE from direction wo (Heitz 2018). The density of
+// the resulting reflected direction wi is G1(wo) D(h) / (4 cos(theta_o)): see PbrBsdf::pdf.
+inline Vec3 ggxSampleVisibleNormal(const Vec3& wo, float alpha, float u1, float u2) {
+    Vec3 vh = normalize(Vec3(alpha * wo.x, alpha * wo.y, wo.z));       // the view direction in the "unstretched" configuration
+    float lensq = vh.x * vh.x + vh.y * vh.y;
+    Vec3 t1 = lensq > 1e-12f ? Vec3(-vh.y, vh.x, 0) * (1.0f / std::sqrt(lensq)) : Vec3(1, 0, 0);
+    Vec3 t2 = cross(vh, t1);
+    float r = std::sqrt(u1), phi = 2.0f * kPi * u2;
+    float p1 = r * std::cos(phi), p2 = r * std::sin(phi);
+    float s = 0.5f * (1.0f + vh.z);
+    p2 = (1.0f - s) * std::sqrt(std::max(0.0f, 1.0f - p1 * p1)) + s * p2;
+    Vec3 nh = t1 * p1 + t2 * p2 + vh * std::sqrt(std::max(0.0f, 1.0f - p1 * p1 - p2 * p2));
+    return normalize(Vec3(alpha * nh.x, alpha * nh.y, std::max(0.0f, nh.z)));
+}
+
+// Directional albedo of the GGX specular lobe with Schlick Fresnel, as a function of the view direction (mu = cos theta_o) and the
+// roughness. With F = f0 + (f90 - f0) (1 - wo.h)^5 it splits (split-sum, Karis) into two tables that do not depend on f0 / f90:
+//     Es(mu) = f0 * A(mu, r) + f90 * B(mu, r)       A = E[(1 - (1-wo.h)^5) G2/G1],  B = E[(1-wo.h)^5 G2/G1]
+// where E is taken over visible-normal samples (stratified, deterministic). Built once, on first use (~0.1 s in Release).
+// The diffuse lobe needs it to conserve energy together with the specular lobe (see PbrBsdf).
+struct SpecularAlbedoLut {
+    static constexpr int NM = 24, NR = 24;
+    static constexpr float rMin = 0.03f;
+    float A[NM][NR], B[NM][NR], Abar[NR], Bbar[NR];
+
+    SpecularAlbedoLut() {
+        const int S = 48;
+        for (int j = 0; j < NR; j++) {
+            float rough = rMin + (1.0f - rMin) * j / (NR - 1), alpha = rough * rough;
+            for (int i = 0; i < NM; i++) {
+                float mu = (i + 0.5f) / NM;
+                Vec3 wo(std::sqrt(std::max(0.0f, 1.0f - mu * mu)), 0, mu);
+                double t = 0, k = 0;
+                for (int a = 0; a < S; a++) for (int b = 0; b < S; b++) {
+                    Vec3 h = ggxSampleVisibleNormal(wo, alpha, (a + 0.5f) / S, (b + 0.5f) / S);
+                    Vec3 wi = h * (2.0f * dot(wo, h)) - wo;
+                    if (wi.z <= 0) continue;
+                    float w = ggxG2(wo.z, wi.z, alpha) / ggxG1(wo.z, alpha);
+                    float m = 1.0f - std::max(0.0f, dot(wo, h)), m2 = m * m;
+                    t += w; k += w * m2 * m2 * m;
+                }
+                A[i][j] = (float)((t - k) / (S * S)); B[i][j] = (float)(k / (S * S));
+            }
+            double ab = 0, bb = 0;                                   // cosine-weighted hemispherical averages: 2 * integral of Es(mu) mu dmu
+            for (int i = 0; i < NM; i++) { float mu = (i + 0.5f) / NM; ab += 2.0 * A[i][j] * mu / NM; bb += 2.0 * B[i][j] * mu / NM; }
+            Abar[j] = (float)ab; Bbar[j] = (float)bb;
+        }
+    }
+    static const SpecularAlbedoLut& get() { static const SpecularAlbedoLut lut; return lut; }
+
+    void lookup(float mu, float rough, float& a, float& b) const {
+        float x = std::min((float)NM - 1.0f, std::max(0.0f, mu * NM - 0.5f));
+        float y = std::min((float)NR - 1.0f, std::max(0.0f, (rough - rMin) / (1.0f - rMin) * (NR - 1)));
+        int i0 = (int)x, j0 = (int)y, i1 = std::min(i0 + 1, NM - 1), j1 = std::min(j0 + 1, NR - 1);
+        float fx = x - i0, fy = y - j0;
+        a = (A[i0][j0] * (1 - fx) + A[i1][j0] * fx) * (1 - fy) + (A[i0][j1] * (1 - fx) + A[i1][j1] * fx) * fy;
+        b = (B[i0][j0] * (1 - fx) + B[i1][j0] * fx) * (1 - fy) + (B[i0][j1] * (1 - fx) + B[i1][j1] * fx) * fy;
+    }
+    void average(float rough, float& a, float& b) const {
+        float y = std::min((float)NR - 1.0f, std::max(0.0f, (rough - rMin) / (1.0f - rMin) * (NR - 1)));
+        int j0 = (int)y, j1 = std::min(j0 + 1, NR - 1);
+        float fy = y - j0;
+        a = Abar[j0] * (1 - fy) + Abar[j1] * fy;
+        b = Bbar[j0] * (1 - fy) + Bbar[j1] * fy;
+    }
+};
+
+struct BsdfSample {
+    Vec3 wi;               // sampled direction (local frame)
+    Vec3 weight;           // f * cos / pdf: what the path throughput is multiplied by
+    float pdf = 0;         // density (per solid angle) of the non-delta lobes at wi, with the lobe selection probabilities (for MIS)
+    bool delta = false;    // a mirror lobe was chosen: the direction cannot be produced by light sampling
+    bool valid = false;
+};
+
+// glTF metallic-roughness surface without transmission, in the local frame (normal = +z, all directions point away):
+//   f = diffuseColor * (1 - Es(mu_o)) (1 - Es(mu_i)) / (pi (1 - Ebar))   (diffuse)
+//     + F(wo.h) D(h) G2 / (4 cos_o cos_i)                                  (GGX specular, single scattering)
+//     + Fms (1 - E(mu_o)) (1 - E(mu_i)) / (pi (1 - Ebar_E))                (multiple scattering between microfacets)
+// diffuseColor = base * (1 - metallic); F is Schlick with f0 = mix(dielectric f0, base, metallic) and f90 = mix(specularFactor,
+// 1, metallic), the dielectric f0 coming from the index of refraction (0.04 for 1.5) times KHR_materials_specular.
+// alpha = roughness^2. Es(mu) is the directional albedo of the specular lobe (SpecularAlbedoLut), Ebar its cosine-weighted
+// average. The diffuse part is what the specular lobe does not already reflect: its albedo is exactly 1 - Es(mu_o), so the two
+// lobes together never exceed 1, and it is reciprocal (Weidlich-Wilkie / Kulla-Conty style coupling). The simpler glTF form
+// (1 - F(wo.h)) * diffuse + specular is NOT energy conserving: it reaches an albedo of 1.4 at grazing angles (measured).
+// The multiple-scattering term (Kulla & Conty 2017, optional) puts back the light that single-scattering GGX loses when it bounces
+// a second time between microfacets (35% at roughness 0.75 and 61% at 1.0 for a white metal): E(mu) = A + B is the albedo of
+// GGX with F = 1, Favg the cosine-weighted average of F, Fms = Favg^2 Ebar_E / (1 - Favg (1 - Ebar_E)); it is a cosine-like lobe,
+// sampled like the diffuse lobe, and counts as part of the specular albedo in the diffuse coupling.
+// Below alpha 1e-3 the specular lobe is a perfect mirror (a delta lobe: it has no eval() / pdf(), and is chosen with
+// probability pSpec; its Es is just F).
+struct PbrBsdf {
+    Vec3 diffuseColor{0, 0, 0};
+    Vec3 f0{0.04f, 0.04f, 0.04f};
+    float f90 = 1.0f;              // reflectance of the specular lobe at grazing angles: mix(specularFactor, 1, metallic)
+    float dielF0 = 0.04f;
+    float dielF90 = 1.0f;          // specularFactor: the dielectric layer reflects nothing at all when it is 0
+    float alpha = 1.0f;
+    float rough = 1.0f;
+    Vec3 ebar{0, 0, 0};            // cosine-weighted average of the specular lobe's total albedo (incl. multiple scattering), per channel
+    Vec3 fms{0, 0, 0};             // multiple-scattering factor (0 when switched off, for mirrors, or without a specular lobe)
+    float eBarScalar = 1.0f;       // cosine-weighted average of E(mu) (GGX albedo with F = 1)
+    float pSpec = 0.5f;            // probability of sampling the specular lobe (else the diffuse lobe)
+    bool specDelta = false;
+
+    static float luminance(const Vec3& c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
+
+    static PbrBsdf make(const Material& m, bool multiScatter = true) {
+        PbrBsdf b;
+        float metallic = std::min(1.0f, std::max(0.0f, m.metallic));
+        float r = (m.ior - 1.0f) / (m.ior + 1.0f);
+        b.dielF0 = std::min(1.0f, std::max(0.0f, r * r * m.specular));
+        b.dielF90 = std::min(1.0f, std::max(0.0f, m.specular));
+        b.f90 = b.dielF90 * (1.0f - metallic) + metallic;
+        b.diffuseColor = m.base * (1.0f - metallic);
+        b.f0 = mix(Vec3(b.dielF0, b.dielF0, b.dielF0), m.base, metallic);
+        float rough = std::min(1.0f, std::max(0.0f, m.roughness));
+        b.rough = rough;
+        b.alpha = rough * rough;
+        b.specDelta = b.alpha < 1e-3f;
+        Vec3 favg = b.f0 + (Vec3(b.f90, b.f90, b.f90) - b.f0) * (1.0f / 21.0f);        // 2 * integral of Schlick(mu) mu dmu
+        float sL;
+        if (b.specDelta) {
+            b.ebar = favg;
+            sL = luminance(b.f0);
+        } else {
+            float ab, bb;
+            SpecularAlbedoLut::get().average(rough, ab, bb);
+            Vec3 ebarSpec = b.f0 * ab + Vec3(b.f90, b.f90, b.f90) * bb;
+            b.eBarScalar = ab + bb;
+            b.ebar = ebarSpec;
+            if (multiScatter) {
+                float e = std::min(b.eBarScalar, 0.9999f);
+                auto ms = [&](float fa) { return fa * fa * e / std::max(1.0f - fa * (1.0f - e), 1e-4f); };
+                b.fms = Vec3(ms(favg.x), ms(favg.y), ms(favg.z));
+                b.ebar = ebarSpec + b.fms * (1.0f - e);
+            }
+            sL = luminance(ebarSpec);
+        }
+        float dL = luminance(b.diffuseColor) * (1.0f - b.dielF0) + luminance(b.fms) * (1.0f - b.eBarScalar);
+        if (sL <= 0) b.pSpec = 0.0f;
+        else if (dL <= 0) b.pSpec = 1.0f;
+        else b.pSpec = std::min(0.95f, std::max(0.05f, sL / (sL + dL)));
+        return b;
+    }
+
+    // Directional albedo of the specular lobe incl. multiple scattering (per channel), and E(mu) alone, for a view cosine mu.
+    Vec3 specAlbedo(float mu, float& eScalar) const {
+        if (specDelta) { eScalar = 1.0f; return schlickColor(f0, mu, f90); }
+        float a, b;
+        SpecularAlbedoLut::get().lookup(mu, rough, a, b);
+        eScalar = a + b;
+        return f0 * a + Vec3(f90, f90, f90) * b + fms * (1.0f - std::min(eScalar, 1.0f));
+    }
+
+    // BSDF value of the non-delta lobes (not multiplied by cos).
+    Vec3 eval(const Vec3& wo, const Vec3& wi) const {
+        if (wo.z <= 0 || wi.z <= 0) return Vec3(0, 0, 0);
+        Vec3 h = normalize(wo + wi);
+        float woh = std::max(dot(wo, h), 0.0f);
+        Vec3 f(0, 0, 0);
+        if (diffuseColor.x + diffuseColor.y + diffuseColor.z + fms.x + fms.y + fms.z > 0) {
+            float Eo, Ei;
+            Vec3 eo = specAlbedo(wo.z, Eo), ei = specAlbedo(wi.z, Ei);
+            auto w = [](float o, float i, float e) { return (1.0f - o) * (1.0f - i) / (kPi * std::max(1.0f - e, 1e-3f)); };
+            f = Vec3(diffuseColor.x * w(eo.x, ei.x, ebar.x), diffuseColor.y * w(eo.y, ei.y, ebar.y), diffuseColor.z * w(eo.z, ei.z, ebar.z));
+            float msw = (1.0f - std::min(Eo, 1.0f)) * (1.0f - std::min(Ei, 1.0f)) / (kPi * std::max(1.0f - eBarScalar, 1e-3f));
+            f += fms * msw;
+        }
+        if (!specDelta && pSpec > 0) {
+            f += schlickColor(f0, woh, f90) * (ggxD(h.z, alpha) * ggxG2(wo.z, wi.z, alpha) / (4.0f * wo.z * wi.z));
+        }
+        return f;
+    }
+
+    // Density per solid angle with which sample() produces wi through a non-delta lobe (selection probabilities included).
+    float pdf(const Vec3& wo, const Vec3& wi) const {
+        if (wo.z <= 0 || wi.z <= 0) return 0.0f;
+        float p = (1.0f - pSpec) * wi.z * kInvPi;
+        if (!specDelta && pSpec > 0) {
+            Vec3 h = normalize(wo + wi);
+            p += pSpec * ggxG1(wo.z, alpha) * ggxD(h.z, alpha) / (4.0f * wo.z);
+        }
+        return p;
+    }
+
+    BsdfSample sample(const Vec3& wo, float uLobe, float u1, float u2) const {
+        BsdfSample s;
+        if (wo.z <= 0) return s;
+        if (uLobe < pSpec) {
+            if (specDelta) {                                              // mirror
+                s.wi = Vec3(-wo.x, -wo.y, wo.z);
+                s.weight = schlickColor(f0, wo.z, f90) * (1.0f / pSpec);
+                s.delta = true; s.valid = true;
+                return s;
+            }
+            Vec3 h = ggxSampleVisibleNormal(wo, alpha, u1, u2);
+            s.wi = h * (2.0f * dot(wo, h)) - wo;
+        } else {
+            float r = std::sqrt(u1), phi = 2.0f * kPi * u2;
+            s.wi = Vec3(r * std::cos(phi), r * std::sin(phi), std::sqrt(std::max(0.0f, 1.0f - u1)));
+        }
+        if (s.wi.z <= 0) return s;                                         // the reflected direction went below the surface
+        float p = pdf(wo, s.wi);
+        if (p <= 0) return s;
+        s.weight = eval(wo, s.wi) * (s.wi.z / p);
+        s.pdf = p; s.valid = true;
+        return s;
+    }
+};
+
+// Direct light at x for the PBR model: like sampleDirectLight, with the BSDF in place of albedo / pi.
+//     f(wo, wi) * cos(theta at x) * Le / pdfLight * (MIS weight)
+inline Vec3 sampleDirectLightPbr(const Scene& sc, const Vec3& x, const Vec3& N, const Vec3& Ng, const Frame& fr, const Vec3& woLocal,
+                                 const PbrBsdf& bsdf, Sampler& smp, bool mis) {
+    const AreaLight& a = sc.area;
+    float u = smp.next1D(), v = smp.next1D();
+    Vec3 p = a.center + a.edgeU * (u - 0.5f) + a.edgeV * (v - 0.5f);
+    Vec3 d = p - x;
+    float dist2 = std::max(dot(d, d), 1e-6f), dist = std::sqrt(dist2);
+    Vec3 wi = d * (1.0f / dist);
+    float cosX = dot(N, wi), cosGeo = dot(Ng, wi), cosL = dot(a.normal, wi * -1.0f);
+    if (cosX <= 0 || cosGeo <= 0 || cosL <= 0) return Vec3(0, 0, 0);
+    Vec3 wiLocal = fr.toLocal(wi);
+    Vec3 f = bsdf.eval(woLocal, wiLocal);
+    if (f.x + f.y + f.z <= 0) return Vec3(0, 0, 0);
+    tlStats.shadowRays++;
+    if (sc.occluded(Ray{x + Ng * (EPS * 10), wi}, dist - EPS * 10)) return Vec3(0, 0, 0);
+    float pdfLight = lightPdfSolidAngle(a, dist2, cosL);
+    float weight = mis ? powerHeuristic(pdfLight, bsdf.pdf(woLocal, wiLocal)) : 1.0f;
+    return f * (cosX * a.radiance / pdfLight * weight);
+}
+
+// Path tracing with the PBR model. Same structure as pathTraceLambert (NEE, MIS, Russian roulette), plus:
+//  - the BSDF decides the next direction (diffuse lobe, GGX lobe by visible-normal sampling, or a mirror);
+//  - a glass surface (transmission > 0), chosen with probability = transmission, is a smooth dielectric: reflect with the exact
+//    Fresnel probability, else refract (tinted by the base colour, radiance scaled by (n_i / n_t)^2, which cancels between
+//    entering and leaving). Total internal reflection is handled. Rough glass is not modelled: it is treated as smooth.
+//  - delta events (mirror, glass) cannot be found by light sampling, so no light sampling is done there, and an emitter
+//    reached right after one counts with weight 1 (the MIS branch for delta lobes). Light that reaches a diffuse point through
+//    glass is therefore found by BSDF sampling only (a caustic, noisy), because light sampling treats glass as opaque.
+inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
+    Vec3 L(0, 0, 0), throughput(1, 1, 1);
+    const bool hasLight = sc.area.valid;
+    float prevPdf = 0;
+    bool prevDelta = false;
+    for (int bounce = 0;; bounce++) {
+        Hit h;
+        bool hit = sc.intersect(ray, INF, h);
+        if (hasLight) {
+            float tl = intersectAreaLight(sc.area, ray);
+            if (tl > 0 && (!hit || tl < h.t)) {
+                if (!sc.nee || bounce == 0 || prevDelta) L += throughput * sc.area.radiance;
+                else if (sc.mis) {
+                    float cosL = dot(sc.area.normal, ray.d * -1.0f);
+                    float w = powerHeuristic(prevPdf, lightPdfSolidAngle(sc.area, tl * tl, cosL));
+                    L += throughput * (sc.area.radiance * w);
+                }
+                return L;
+            }
+        }
+        if (!hit) {
+            if (sc.envUniform >= 0) L += throughput * sc.envUniform;
+            else if (sc.envScale > 0) L += throughput * background(ray) * sc.envScale;
+            return L;
+        }
+        if (bounce >= sc.maxDepth) return L;
+
+        const Material& m = sc.materials[h.material];
+        Vec3 V = ray.d * -1.0f;
+        bool front = dot(ray.d, h.ng) < 0;
+        Vec3 Ng = front ? h.ng : -h.ng;                // the side the ray came from
+        Vec3 N = front ? h.n : -h.n;
+        float c = dot(N, Ng);
+        if (c < 0.01f) N = normalize(N + Ng * (0.01f - c));
+        float cv = dot(N, V);
+        if (cv < 0.01f) N = normalize(N + V * (0.01f - cv));      // near a silhouette the smooth normal can face away from the viewer
+
+        Vec3 newDir, newOrigin;
+        if (m.transmission > 0.0f && smp.next1D() < m.transmission) {
+            float cosI = std::min(1.0f, std::max(0.0f, dot(N, V)));
+            float etaRel = front ? m.ior : 1.0f / m.ior;           // n_transmitted / n_incident
+            float F = fresnelDielectric(cosI, etaRel);
+            if (smp.next1D() < F) {
+                newDir = normalize(reflect(ray.d, N));
+                newOrigin = h.p + Ng * (EPS * 10);
+            } else {
+                float eta = 1.0f / etaRel;                            // n_incident / n_transmitted
+                if (!refractDirection(ray.d, N, eta, newDir)) return L;   // cannot happen: F = 1 then
+                newOrigin = h.p - Ng * (EPS * 10);
+                throughput = throughput * m.base * (eta * eta);
+            }
+            prevDelta = true;
+            prevPdf = 0;
+        } else {
+            PbrBsdf bsdf = PbrBsdf::make(m, sc.multiScatter);
+            Frame fr(N);
+            Vec3 wo = fr.toLocal(V);
+            if (sc.nee && hasLight) L += throughput * sampleDirectLightPbr(sc, h.p, N, Ng, fr, wo, bsdf, smp, sc.mis);
+            float uLobe = smp.next1D(), u1 = smp.next1D(), u2 = smp.next1D();
+            BsdfSample bs = bsdf.sample(wo, uLobe, u1, u2);
+            if (!bs.valid) return L;
+            newDir = fr.toWorld(bs.wi);
+            if (dot(newDir, Ng) <= 0) return L;                       // the smooth normal pushed the sample below the real surface
+            newOrigin = h.p + Ng * (EPS * 10);
+            throughput = throughput * bs.weight;
+            prevDelta = bs.delta;
+            prevPdf = bs.pdf;
+        }
+        if (sc.russianRoulette && bounce >= sc.rrStartDepth) {
+            float p = std::min(0.95f, std::max(0.05f, std::max(throughput.x, std::max(throughput.y, throughput.z))));
+            if (smp.next1D() >= p) return L;
+            throughput = throughput * (1.0f / p);
+        }
+        ray = Ray{newOrigin, newDir};
+    }
+}
+
 // Radiance along `ray` by a random walk. At each hit: the albedo multiplies the throughput (Lambert BRDF albedo/pi,
 // times cos / pdf = cos/pi, gives exactly albedo), then a cosine-sampled direction continues the path. Emission is
 // added when the path reaches the light (or, scaled by envScale, escapes into the sky). Only `maxDepth` bounces are
@@ -992,7 +1385,7 @@ inline Vec3 sampleDirectLight(const Scene& sc, const Vec3& x, const Vec3& N, con
 // Russian roulette (Scene::russianRoulette): after rrStartDepth bounces, a path continues with probability p (the
 // largest throughput component, clamped to [0.05, 0.95]) and its throughput is divided by p; otherwise it ends. The
 // expectation is unchanged; dark paths, which matter little, are ended early. maxDepth stays a hard cap.
-inline Vec3 pathTrace(const Scene& sc, Ray ray, Sampler& smp) {
+inline Vec3 pathTraceLambert(const Scene& sc, Ray ray, Sampler& smp) {
     Vec3 L(0, 0, 0), throughput(1, 1, 1);
     const bool hasLight = sc.area.valid;
     float prevBsdfPdf = 0;                              // density (solid angle) with which the current ray was chosen
@@ -1032,6 +1425,10 @@ inline Vec3 pathTrace(const Scene& sc, Ray ray, Sampler& smp) {
         prevBsdfPdf = bsdfPdfLambert(dot(N, d));
         ray = Ray{h.p + Ng * (EPS * 10), d};
     }
+}
+
+inline Vec3 pathTrace(const Scene& sc, Ray ray, Sampler& smp) {
+    return sc.bsdfModel == BsdfModel::Pbr ? pathTracePbr(sc, ray, smp) : pathTraceLambert(sc, ray, smp);
 }
 
 // ---------------------------------------------------------------- camera

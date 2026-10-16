@@ -26,6 +26,9 @@ struct RenderParams {
     bool mis = true;                          // Path + NEE: weigh light sampling against BSDF sampling (MIS)
     bool russianRoulette = false;             // Path: random path termination (maxDepth stays a hard cap)
     float envScale = 0;                       // Path: sky brightness as environment light
+    BsdfModel bsdf = BsdfModel::Pbr;          // Path: surface model (Lambert = the M2 experiments)
+    bool multiScatter = true;                 // Path + PBR: multiple-scattering compensation for rough specular
+    float envUniform = -1;                    // Path: >= 0 = constant radiance for escaping rays (white furnace)
     Accel accel = Accel::Sah;                 // triangle search: none (every triangle) / BVH with median split / BVH with SAH
     bool orderedTraversal = true;             // BVH: nearer child first
     bool anyHitShadows = true;                // Path: shadow rays stop at the first hit
@@ -124,6 +127,9 @@ private:
         scene_->maxDepth = params_.maxDepth;
         configureLight(*scene_, params_.lightMode, params_.lightSize);
         scene_->legacyNormals = params_.legacyNormals;
+        scene_->bsdfModel = params_.bsdf;
+        scene_->envUniform = params_.envUniform;
+        scene_->multiScatter = params_.multiScatter;
         scene_->orderedTraversal = params_.orderedTraversal;
         scene_->anyHitShadows = params_.anyHitShadows;
         scene_->setAccel(params_.accel);
