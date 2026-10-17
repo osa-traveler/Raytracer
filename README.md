@@ -55,7 +55,7 @@ cmake --build build-release
 
 デバッグ用には、`cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug` の `build/` を使います(最適化なしで遅いので、描画や時間の計測には使わないでください)。
 
-リポジトリのルートで実行してください。ウィンドウの左に画像、右に操作パネルが出ます。
+リポジトリのルートで実行してください。ウィンドウの左に画像、右に操作パネルが出ます。オプションの一覧は、[docs/CURRENT_IMPLEMENTATION.md](docs/CURRENT_IMPLEMENTATION.md) の「起動」の行と、[src/main.cpp](src/main.cpp) の冒頭のコメントにあります。
 
 ![操作パネル](docs/screenshots/2026-10-15_gui-latest-64spp.png)
 
@@ -88,6 +88,8 @@ cmake --build build-release
 - ライト: Blender のエリアライトは glTF に書き出されないため、Blender のカスタムプロパティ(大きさ、明るさ)を GLB の extras に出して、レンダラが読みます。面光源(矩形)をランダムにサンプリングして、ソフトシャドウを描きます。点光源(M0 の基準方式)にも切り替えられます(`--light point`)。
 
 ## シーン・アセット
+
+- `presets/`: 設定のプリセット(パネルの **Save preset** で保存、`--preset 名前` で読み込み)。`default.json`(すべて既定)、`example-low-noise.json`(例)、`my-settings_best.json` と `my-settings_best-glass.json`(サンプル画像の設定)
 
 - `Scene/Test/TextureTest.glb`: テクスチャ読み込みの最小のテスト(市松模様の床 + metallicRoughness、128x128 の模様の壁、法線マップ付きの左右の壁。`tools/make_texture_test.py` で生成。すべてのフィルタ・動的 Huffman の PNG を含む)
 - `Scene/Test/MaterialRow.glb`: 材質の球列(`tools/make_material_row.py` で生成。金・赤いプラスチック、roughness 0.05〜1.0、ガラス球 IOR 1.2 / 1.5 / 2.4、鏡)。PBR の確認用
