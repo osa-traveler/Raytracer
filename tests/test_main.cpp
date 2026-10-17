@@ -1686,7 +1686,7 @@ TEST(texture_sampling_is_bilinear_repeating_and_decodes_srgb_before_blending) {
 
 TEST(textured_materials_follow_the_uv_of_the_hit_and_can_be_switched_off) {
     Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
-    CHECK(sc.materials.size() == 3 && sc.materials[0].baseColorTex >= 0 && sc.materials[0].metalRoughTex >= 0 && sc.materials[1].baseColorTex >= 0);
+    CHECK(sc.materials.size() == 5 && sc.materials[0].baseColorTex >= 0 && sc.materials[0].metalRoughTex >= 0 && sc.materials[1].baseColorTex >= 0);
     // straight down onto the floor: uv = ((x + 4) / 4, (z + 4) / 4); a 4-pixel cell is 1 m
     auto at = [&](float x, float z, Material& tmp) {
         Hit h;
@@ -1749,7 +1749,7 @@ TEST(normal_map_follows_the_tangent_frame_for_both_handednesses_and_can_be_switc
     // (left half of the image tn = (0.6, 0, 0.8), right half tn = (0, 0.6, 0.8)); u grows with +z, "up in the image" is +y on both.
     // Seen from inside the room the left wall's frame has handedness -1 and the right wall's +1, which only a correct handedness gets right.
     Scene sc = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
-    CHECK(sc.materials.size() == 3 && sc.materials[2].normalTex >= 0 && sc.materials[2].normalScale == 1.0f);
+    CHECK(sc.materials.size() == 5 && sc.materials[2].normalTex >= 0 && sc.materials[2].normalScale == 1.0f);
     const float r = 204 / 255.0f * 2 - 1, g = 128 / 255.0f * 2 - 1, b = 230 / 255.0f * 2 - 1;   // the decoded 8-bit values (0.6, ~0, ~0.8)
     struct Case { float x, dirx, z, nx, expect[3]; int w; };
     // ray from (0, 3, z) along -x hits the left wall at (-4, 3, z); along +x the right wall
@@ -1914,6 +1914,7 @@ TEST(glossy_floor_changes_nothing_seen_directly_and_cuts_the_noise_of_reflected_
 static Scene floorGlassLight() {
     Scene sc;
     sc.materials = {diffuseMat({0.6f, 0.6f, 0.6f}), pbrMat({1, 1, 1}, 0.0f, 0.0f, 1.0f)};
+    sc.materials[1].thinGlass = true;                                                // a window: marked rt_thin_glass
     sc.tris.push_back(makeTri({-30, 0, -30}, {-30, 0, 30}, {30, 0, -30}));
     sc.tris.push_back(makeTri({30, 0, 30}, {30, 0, -30}, {-30, 0, 30}));
     auto pane = [&](float y, float ny) {
@@ -1979,6 +1980,61 @@ TEST(a_shadow_ray_through_a_glass_slab_is_dimmed_by_the_fresnel_loss_of_both_fac
     bool crossedNothing = false;                                        // the flag is only ever set, never cleared
     Vec3 clear = shadowThroughGlass(sc, Vec3(0, 1.5f, 0), Vec3(0, 1, 0), 5.0f, crossedNothing);   // above the pane: nothing in the way
     CHECK(clear.x == 1.0f && clear.y == 1.0f && clear.z == 1.0f && !crossedNothing);
+}
+
+TEST(only_glass_marked_as_thin_lets_shadow_rays_through_and_the_loader_reads_the_mark) {
+    // the loader: extras.rt_thin_glass on a material (Scene/Test/TextureTest.glb has one marked and one unmarked glass material)
+    Scene tt = loadScene(std::string(PROJECT_DIR) + "/Scene/Test/TextureTest.glb");
+    int thin = -1, thick = -1;
+    for (size_t i = 0; i < tt.materials.size(); i++) {
+        if (tt.materials[i].name == "thin_glass") thin = (int)i;
+        if (tt.materials[i].name == "thick_glass") thick = (int)i;
+        if (tt.materials[i].name != "thin_glass") CHECK(!tt.materials[i].thinGlass);
+    }
+    CHECK(thin >= 0 && thick >= 0 && tt.materials[thin].thinGlass && !tt.materials[thick].thinGlass);
+    CHECK(tt.materials[thin].transmission == 1.0f && tt.materials[thick].transmission == 1.0f);       // both are real glass; only the mark differs
+    // a shadow ray: through the marked pane yes, through the same pane unmarked no
+    Scene thinScene = floorGlassLight(), thickScene = thinScene;
+    thickScene.materials[1].thinGlass = false;
+    thinScene.glassShadows = thickScene.glassShadows = true;
+    bool crossed = false;
+    Vec3 a = shadowThroughGlass(thinScene, Vec3(0.2f, 0.5f, 0), Vec3(0, 1, 0), 5.0f, crossed);
+    CHECK(crossed && a.x > 0.5f && a.x < 1.0f);
+    crossed = false;
+    Vec3 b = shadowThroughGlass(thickScene, Vec3(0.2f, 0.5f, 0), Vec3(0, 1, 0), 5.0f, crossed);
+    CHECK(!crossed && b.x == 0.0f && b.y == 0.0f && b.z == 0.0f);
+    // glass that is not marked behaves exactly as if the switch were off, sample by sample (a ball keeps its dark shadow)
+    Scene off = thickScene; off.glassShadows = false;
+    int same = 0, total = 0;
+    for (int i = 0; i < 300; i++) {
+        Ray r{Vec3(0.3f + 0.01f * (i % 30), 0.5f, 0.2f - 0.01f * (i / 30)), Vec3(0, -1, 0)};
+        Sampler s1(9, 0, (uint32_t)i), s2(9, 0, (uint32_t)i);
+        Vec3 u = pathTrace(thickScene, r, s1), v = pathTrace(off, r, s2);
+        total++; same += (u.x == v.x && u.y == v.y && u.z == v.z);
+    }
+    CHECK(same == total);
+    // a path that went through thin and then through other glass is not dropped: with a thin pane and an unmarked pane in series,
+    // switching the option on changes nothing (the shadow ray is blocked by the unmarked pane, and every light path is still counted)
+    Scene both = thinScene;                                                      // the thin pane at y = 1.00 / 1.02 ...
+    both.materials.push_back(pbrMat({1, 1, 1}, 0.0f, 0.0f, 1.0f));              // ... and an unmarked one at y = 1.30 / 1.32
+    for (float y : {1.30f, 1.32f}) {
+        float ny = y < 1.31f ? -1.0f : 1.0f;
+        for (int k = 0; k < 2; k++) {
+            Triangle t = k == 0 ? makeTri({-30, y, -30}, {-30, y, 30}, {30, y, -30}) : makeTri({30, y, 30}, {30, y, -30}, {-30, y, 30});
+            t.n0 = t.n1 = t.n2 = Vec3(0, ny, 0); t.material = 2;
+            both.tris.push_back(t);
+        }
+    }
+    both.buildBvh();
+    Scene bothOff = both; bothOff.glassShadows = false;
+    int same2 = 0, total2 = 0;
+    for (int i = 0; i < 300; i++) {
+        Ray r{Vec3(0.3f + 0.01f * (i % 30), 0.5f, 0.2f - 0.01f * (i / 30)), Vec3(0, -1, 0)};
+        Sampler s1(9, 0, (uint32_t)i), s2(9, 0, (uint32_t)i);
+        Vec3 u = pathTrace(both, r, s1), v = pathTrace(bothOff, r, s2);
+        total2++; same2 += (u.x == v.x && u.y == v.y && u.z == v.z);
+    }
+    CHECK(same2 == total2);
 }
 
 TEST(noise_switches_are_off_by_default) {

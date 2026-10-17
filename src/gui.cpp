@@ -378,9 +378,9 @@ int runGui(const GuiOptions& opt) {
         ImGui::SliderFloat("glossy floor", &params.glossyFloor, 0.0f, 1.0f, params.glossyFloor <= 0 ? "off" : "%.2f");
         tip("一度反射したあとの光が見る光沢面に、この粗さを下限として与えます。ほぼ鏡の面で反射した光による白い粒が減ります。そのかわり、間接光で見える映り込みが少しぼけます。0 = オフ。カメラが直接見る反射は、鋭いままです。",
             "Give glossy surfaces seen by light that has already bounced at least this roughness. Fewer white speckles from near-mirror surfaces, but reflections seen by indirect light get a little blurry. 0 = off. What the camera sees directly stays sharp.");
-        ImGui::Checkbox("shadow rays pass through glass", &params.glassShadows);
-        tip("影レイが、ガラスを(色と反射の損失の分だけ弱まりながら)通り抜けます。窓越しの室内などのノイズが大きく減ります。薄い平らなガラス向けで、ガラス球のような厚いガラスでは不正確です(コースティクスは出ません)。",
-            "Shadow rays pass through glass (dimmed by its tint and reflection loss). Greatly reduces noise behind windows. Meant for thin flat glass; inaccurate for thick glass such as a ball (no caustics).");
+        ImGui::Checkbox("shadow rays pass through thin glass", &params.glassShadows);
+        tip("影レイが、「薄いガラス」だけ(色と反射の損失の分だけ弱まりながら)通り抜けます。窓越しの室内などのノイズが大きく減ります。薄いガラスは、Blender の材質に、カスタムプロパティ rt_thin_glass = 1 を付けて指定します。付けていないガラス(球など)は、これまでどおり、影レイをさえぎります。",
+            "Shadow rays pass through THIN glass only (dimmed by tint and reflection loss). Greatly reduces noise behind windows. Mark thin glass with the material custom property rt_thin_glass = 1 in Blender; other glass (a ball) still blocks shadow rays.");
         ImGui::EndDisabled();
         int lightModeIndex = params.lightMode == LightMode::Area ? 1 : 0;
         ImGui::Combo("light", &lightModeIndex, "point (M0 baseline, hard shadow)\0area (soft shadow)\0");

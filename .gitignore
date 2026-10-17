@@ -68,3 +68,6 @@ experiments/2026-10-17_beetle-views/out/
 # beetle views rendered with a preset: the PNGs are kept once, in docs/screenshots (the JSON with the settings and timings stays here)
 experiments/2026-10-17_beetle-views/best/*.png
 
+# cabin noise check: the picture comparing the two renders is in docs/screenshots
+experiments/2026-10-17_beetle-views/interior/*.png
+

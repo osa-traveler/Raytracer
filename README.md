@@ -10,15 +10,15 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 
 ## サンプル画像
 
-ビートルの 5 つの視点(プリセット [`presets/my-settings_best.json`](presets/my-settings_best.json) で描画。Path、PBR、面光源の NEE + MIS、**1024 spp**、シード 2、最大反射 6、面光源の一辺 1.01 m、空の光 0.1、間接光のクランプ 10、光沢面のぼかし 0.89、ガラスの影はオフ、露出 3.07、ガンマ 2.33、テクスチャ・法線マップあり、640x480、8 スレッド、1 枚あたり 240〜268 秒)。同じ設定は、`--preset my-settings_best` で再現できます(視点は、[`experiments/2026-10-17_beetle-views/`](experiments/2026-10-17_beetle-views/) の `make_views.py`)。
+ビートルの 5 つの視点(プリセット [`presets/my-settings_best-glass.json`](presets/my-settings_best-glass.json) で描画。Path、PBR、面光源の NEE + MIS、**1024 spp**、シード 2、最大反射 6、面光源の一辺 1.01 m、空の光 0.1、間接光のクランプ 10、光沢面のぼかし 0.89、**ガラスの影オン(窓ガラスだけ。材質のカスタムプロパティ `rt_thin_glass`)**、露出 3.07、ガンマ 2.33、テクスチャ・法線マップあり、640x480、8 スレッド、1 枚あたり 248〜284 秒)。同じ設定は、`--preset my-settings_best-glass` で再現できます(視点は、[`experiments/2026-10-17_beetle-views/`](experiments/2026-10-17_beetle-views/) の `make_views.py`)。
 
 | | |
 |---|---|
-| ![前方の斜め](docs/screenshots/2026-10-17_beetle-view1-front-three-quarter.png)<br>前方の斜め | ![側面](docs/screenshots/2026-10-17_beetle-view2-side.png)<br>側面(やや後ろ寄り) |
-| ![後方の斜め](docs/screenshots/2026-10-17_beetle-view3-rear-three-quarter.png)<br>後方の斜め | ![高い位置から](docs/screenshots/2026-10-17_beetle-view4-high-from-front.png)<br>高い位置から(前方) |
-| ![低い位置](docs/screenshots/2026-10-17_beetle-view5-low-front-close.png)<br>低い位置、前方に近い | |
+| ![前方の斜め](docs/screenshots/2026-10-17_beetle-glass-view1-front-three-quarter.png)<br>前方の斜め | ![側面](docs/screenshots/2026-10-17_beetle-glass-view2-side.png)<br>側面(やや後ろ寄り) |
+| ![後方の斜め](docs/screenshots/2026-10-17_beetle-glass-view3-rear-three-quarter.png)<br>後方の斜め | ![高い位置から](docs/screenshots/2026-10-17_beetle-glass-view4-high-from-front.png)<br>高い位置から(前方) |
+| ![低い位置](docs/screenshots/2026-10-17_beetle-glass-view5-low-front-close.png)<br>低い位置、前方に近い | |
 
-ビートルのモデルは、CGTrader「VW Classic Bettle」(Royalty Free License)です。モデルのファイル自体は、このリポジトリに含めていません。クランプと光沢面のぼかしは、わずかに偏りが入る設定です(解説: [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md) 第14章)。窓ガラスの内側などに、細かい粒が少し残ります。
+ビートルのモデルは、CGTrader「VW Classic Bettle」(Royalty Free License)です。モデルのファイル自体は、このリポジトリに含めていません。クランプと光沢面のぼかしは、わずかに偏りが入る設定です(解説: [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md) 第14章)。ガラスの影をオフにした版(同じ設定で、車内に白い粒が多く残る)は、[`presets/my-settings_best.json`](presets/my-settings_best.json) です。窓ガラスの内側などに、細かい粒が少し残ります。2 枚目のドアの下の白い点は、ノイズではなく、両方の版で同じ場所に出ます(モデルかテクスチャの特徴で、原因は未調査)。
 
 ## 機能
 
@@ -31,13 +31,14 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
   - ガラスの屈折(IOR 1.5、フレネル、全反射)
 - **PBR の材質**(`--integrator path`、既定): glTF の metallic / roughness / transmission / IOR に対応。GGX のマイクロファセット(見える法線のサンプリング)、Fresnel、多重散乱の補正、滑らかなガラス(屈折・全反射)、鏡。拡散と鏡面のエネルギー保存を、白い炉と数値積分で確認。同じシーンを Blender Cycles と比べて、鋭い金属・鏡は 0.3% 以内で一致(他は 2〜5% の差)。旧 Lambert モデルは `--bsdf lambert`。粗いガラスは未対応
 - **パストレーシング**(`--integrator path`): コサイン重み付きサンプリング、反射回数の指定、NEE(光源への直接サンプリング、`--no-nee` で切り替え)、**MIS**(光源サンプリングと BSDF サンプリングの組み合わせ、既定。`--no-mis`)、**Russian Roulette**(`--rr`)。拡散面どうしの間接光(カラーブリーディング)が描ける。Cornell Box で NEE により、同じ spp の誤差が約 1/4
-- **ノイズを減らす 3 つのスイッチ**(Path、既定オフ): 間接光のクランプ(`--clamp-indirect`)、光沢面のぼかし(`--glossy-floor`)、ガラスの影(`--glass-shadows`。窓越しの白い粒が大きく減る)。解説: [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md) 第14章
+- **ノイズを減らす 3 つのスイッチ**(Path、既定オフ): 間接光のクランプ(`--clamp-indirect`)、光沢面のぼかし(`--glossy-floor`)、ガラスの影(`--glass-shadows`。窓越しの白い粒が大きく減る。**材質のカスタムプロパティ `rt_thin_glass = 1` を付けた薄いガラスだけ**が対象で、ガラス球の影は変わらない)。解説: [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md) 第14章
+- **Blender のカスタムプロパティ**: このレンダラー専用の設定(面光源の `rt_light_type` など、薄いガラスの印 `rt_thin_glass`)は、Blender のカスタムプロパティで渡します。一覧と付け方: [docs/CURRENT_IMPLEMENTATION.md](docs/CURRENT_IMPLEMENTATION.md) の「Blender のカスタムプロパティ」
 - **段階描画**(ウィンドウの既定): 1→4→16→64→… spp と更新し、後から「+ samples」で追加できる。パスの分け方によらず、同じ画像
 - **画像のズーム・パン**(スクロール / ドラッグ / ダブルクリックで全体表示)、カーソル下のピクセル値の表示
 - モンテカルロ法: 再現性のある乱数(PCG32、ピクセルごとに独立。スレッド数によらず結果が同一)、1ピクセルのサンプル数(`--spp`)、ピクセル内のランダムな位置(ジッタ = アンチエイリアス)
 - 線形の浮動小数の film と、表示変換(露出・ガンマ)の分離。画像は PNG・PFM(線形)で保存、画像どうしの差(RMSE)を測れる
 - マルチスレッドで走査線ごとに描画し、描画の進行をウィンドウに表示
-- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(2232項目)、再現できる実験(`experiments/`)
+- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(2242項目)、再現できる実験(`experiments/`)
 
 ## ビルドと実行
 

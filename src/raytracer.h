@@ -220,6 +220,7 @@ struct Material {
     int normalTex = -1;        // glTF normalTexture: tangent-space normal map (+X right, +Y up in the image), -1 = none
     float normalScale = 1.0f;  // glTF normalTexture.scale: multiplies the X and Y of the decoded normal
     int metalRoughTex = -1;    // glTF metallicRoughnessTexture: G = roughness, B = metalness (multiplied with the factors), -1 = none
+    bool thinGlass = false;    // the glTF material's extras.rt_thin_glass (set in Blender as the material's custom property rt_thin_glass = 1): thin flat glass such as a window; only used with Scene::glassShadows
     bool doubleSided = true;   // glTF doubleSided (the loader reads it, the default of the file format is false). Only used with Scene::cullBackfaces
     std::string name;
 };
@@ -335,7 +336,7 @@ struct Scene {
     // Ways to trade a little accuracy for less noise in Path mode (all off by default: the earlier images are reproduced bit for bit).
     float clampIndirect = 0.0f;           // > 0: every contribution of a path with two or more scatterings is scaled down so that its largest component is at most this (0 = off)
     float glossyFloor = 0.0f;             // > 0: after a diffuse / glossy bounce, glossy surfaces get at least this roughness (blurs what indirect light sees; 0 = off)
-    bool glassShadows = false;            // true: shadow rays pass through glass (tinted, Fresnel-reduced) instead of being blocked; light that reaches a surface through glass by BSDF sampling alone is then not counted (the shadow ray stands for it)
+    bool glassShadows = false;            // true: shadow rays pass through THIN glass (materials marked rt_thin_glass; tinted, Fresnel-reduced) instead of being blocked; other glass (a ball) still blocks them. Light that reaches a surface through thin glass by BSDF sampling alone is then not counted (the shadow ray stands for it)
     bool useNormalMaps = true;            // false: ignore normal maps (baseColor / metallicRoughness textures are unaffected)
     bool useTextures = true;              // false: ignore textures and use the material factors only (all earlier images)
     std::vector<Triangle> tris;
@@ -894,6 +895,10 @@ inline Scene loadScene(const std::string& path) {
         const Json& ext = mats[i]["extensions"];
         if (ext.has("KHR_materials_transmission")) m.transmission = ext["KHR_materials_transmission"]["transmissionFactor"].f(0);
         if (ext.has("KHR_materials_ior")) m.ior = ext["KHR_materials_ior"]["ior"].f(1.5f);
+        {   // custom property of the material in Blender (exported as extras): rt_thin_glass = 1 marks thin flat glass (see docs/CURRENT_IMPLEMENTATION.md)
+            const Json& ex = mats[i]["extras"];
+            if (ex.has("rt_thin_glass")) { const Json& t = ex["rt_thin_glass"]; m.thinGlass = t.type == Json::Bool ? t.b : t.f() != 0.0f; }
+        }
         m.doubleSided = mats[i].has("doubleSided") ? mats[i]["doubleSided"].b : false;   // glTF default
         if (ext.has("KHR_materials_specular")) m.specular = ext["KHR_materials_specular"]["specularFactor"].f(1.0f);
         sc.materials.push_back(m);
@@ -1440,9 +1445,9 @@ struct PbrBsdf {
     }
 };
 
-// A shadow ray that may pass through glass (Scene::glassShadows). Returns the transmittance along the ray from `o` in direction `d`
-// for `dist` metres: 0 when something that is not glass is in the way, otherwise the product over the glass surfaces crossed of
-// base colour * transmission * (1 - Fresnel reflectance). Each surface counts once, the way a refracted path would; the sideways
+// A shadow ray that may pass through thin glass (Scene::glassShadows). Returns the transmittance along the ray from `o` in direction `d`
+// for `dist` metres: 0 when something that is not thin glass is in the way (an opaque surface, or glass that is not marked rt_thin_glass,
+// such as a ball), otherwise the product over the glass surfaces crossed of base colour * transmission * (1 - Fresnel reflectance). Each surface counts once, the way a refracted path would; the sideways
 // shift a pane gives the ray is ignored, so this is right for thin flat glass (windows) and only an approximation for a ball.
 // `crossed` is set when any glass was crossed.
 inline Vec3 shadowThroughGlass(const Scene& sc, Vec3 o, const Vec3& d, float dist, bool& crossed) {
@@ -1453,7 +1458,7 @@ inline Vec3 shadowThroughGlass(const Scene& sc, Vec3 o, const Vec3& d, float dis
         if (!sc.intersect(Ray{o, d}, remaining, h)) return T;
         Material mtex;
         const Material& m = materialAt(sc, h, mtex);
-        if (m.transmission <= 0.0f) return Vec3(0, 0, 0);
+        if (m.transmission <= 0.0f || !m.thinGlass) return Vec3(0, 0, 0);
         // Every face is treated as one entered from air at the angle the straight shadow ray has. For the face a ray leaves through the
         // transmittance is the same by symmetry (and using the inside-the-glass formula with the outside angle would call a ray beyond
         // 42 degrees totally reflected, which a straight ray that really passes the pane is not).
@@ -1513,16 +1518,18 @@ inline Vec3 sampleDirectLightPbr(const Scene& sc, const Vec3& x, const Vec3& N, 
 //    mirror or glossy highlight seen straight from the camera are never clamped.
 //  - glossyFloor: once the path has had a non-delta (diffuse / glossy) bounce, surfaces get at least this roughness, so a nearly
 //    mirror-like surface seen only by indirect light spreads its reflection (probability up, value per hit down).
-//  - glassShadows: light sampling sends the shadow ray through glass (shadowThroughGlass). The emitter reached by BSDF sampling
-//    after a refraction that followed a diffuse / glossy vertex is then not counted (that vertex's shadow ray covers it); a light
-//    seen by the camera itself through glass, and reflections off glass, still count.
+//  - glassShadows: light sampling sends the shadow ray through THIN glass (materials marked rt_thin_glass; shadowThroughGlass); other
+//    glass (a ball) blocks it as before. The emitter reached by BSDF sampling after refractions through thin glass only, which followed a
+//    diffuse / glossy vertex, is then not counted (that vertex's shadow ray covers it); a path that also refracted through other glass is
+//    counted (the shadow ray cannot stand for it); a light seen by the camera itself through glass, and reflections off glass, still count.
 inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
     Vec3 L(0, 0, 0), throughput(1, 1, 1);
     const bool hasLight = sc.area.valid;
     float prevPdf = 0;
     bool prevDelta = false;
     bool scattered = false;         // a non-delta (diffuse / glossy) bounce has happened on this path
-    bool refractedSince = false;    // a refraction happened since the last non-delta vertex
+    bool refractedThin = false;     // since the last non-delta vertex the path refracted through thin glass (rt_thin_glass) ...
+    bool refractedThick = false;    // ... and / or through other glass
     auto add = [&](const Vec3& c, bool indirect) { L += indirect ? clampContribution(c, sc.clampIndirect) : c; };
     for (int bounce = 0;; bounce++) {
         Hit h;
@@ -1530,7 +1537,7 @@ inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
         if (hasLight) {
             float tl = intersectAreaLight(sc.area, ray);
             if (tl > 0 && (!hit || tl < h.t)) {
-                if (sc.glassShadows && sc.nee && prevDelta && refractedSince && scattered) return L;   // counted by the shadow ray through the glass
+                if (sc.glassShadows && sc.nee && prevDelta && refractedThin && !refractedThick && scattered) return L;   // counted by the shadow ray through the thin glass
                 if (!sc.nee || bounce == 0 || prevDelta) add(throughput * sc.area.radiance, bounce >= 2);
                 else if (sc.mis) {
                     float cosL = dot(sc.area.normal, ray.d * -1.0f);
@@ -1572,7 +1579,7 @@ inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
                 if (!refractDirection(ray.d, N, eta, newDir)) return L;   // cannot happen: F = 1 then
                 newOrigin = h.p - Ng * (EPS * 10);
                 throughput = throughput * m.base * (eta * eta);
-                refractedSince = true;
+                if (m.thinGlass) refractedThin = true; else refractedThick = true;
             }
             prevDelta = true;
             prevPdf = 0;
@@ -1590,7 +1597,7 @@ inline Vec3 pathTracePbr(const Scene& sc, Ray ray, Sampler& smp) {
             throughput = throughput * bs.weight;
             prevDelta = bs.delta;
             prevPdf = bs.pdf;
-            if (!bs.delta) { scattered = true; refractedSince = false; }
+            if (!bs.delta) { scattered = true; refractedThin = false; refractedThick = false; }
         }
         if (sc.russianRoulette && bounce >= sc.rrStartDepth) {
             float p = std::min(0.95f, std::max(0.05f, std::max(throughput.x, std::max(throughput.y, throughput.z))));

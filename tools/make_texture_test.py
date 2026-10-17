@@ -93,6 +93,13 @@ mats.append({'name': 'wall', 'doubleSided': True, 'pbrMetallicRoughness': {
     'baseColorFactor': [1, 1, 1, 1], 'metallicFactor': 0.0, 'roughnessFactor': 0.8, 'baseColorTexture': {'index': 2}}})
 mats.append({'name': 'sidewall', 'doubleSided': True, 'pbrMetallicRoughness': {
     'baseColorFactor': [0.7, 0.7, 0.7, 1], 'metallicFactor': 0.0, 'roughnessFactor': 0.9}, 'normalTexture': {'index': 3, 'scale': 1.0}})
+# two small glass quads far behind the camera (not in the picture): one marked as thin glass with the material custom property
+# rt_thin_glass (exported by Blender as extras), one not marked; tests/test_main.cpp checks that the loader reads the mark
+tg = {'KHR_materials_transmission': {'transmissionFactor': 1.0}, 'KHR_materials_ior': {'ior': 1.5}}
+mats.append({'name': 'thin_glass', 'doubleSided': True, 'extras': {'rt_thin_glass': 1}, 'extensions': tg,
+             'pbrMetallicRoughness': {'baseColorFactor': [1, 1, 1, 1], 'metallicFactor': 0.0, 'roughnessFactor': 0.0}})
+mats.append({'name': 'thick_glass', 'doubleSided': True, 'extensions': tg,
+             'pbrMetallicRoughness': {'baseColorFactor': [1, 1, 1, 1], 'metallicFactor': 0.0, 'roughnessFactor': 0.0}})
 # floor: world (x, z) in [-4, 4]^2  ->  uv = ((x + 4) / 4, (z + 4) / 4)  (0..2)
 quad('floor', [(-4, 0, 4), (4, 0, 4), (4, 0, -4), (-4, 0, -4)], (0, 1, 0), [(0, 2), (2, 2), (2, 0), (0, 0)], 0)
 # wall at z = -4, x in [-4, 4], y in [0, 6]  ->  uv = ((x + 4) / 8, 1 - y / 6)
@@ -103,6 +110,22 @@ quad('left_wall', [(-4, 0, 4), (-4, 0, -4), (-4, 6, -4), (-4, 6, 4)], (1, 0, 0),
 # right wall at x = +4 (normal -x): the same uv rule, seen from inside the room; handedness +1
 quad('right_wall', [(4, 0, -4), (4, 0, 4), (4, 6, 4), (4, 6, -4)], (-1, 0, 0), [(0, 1), (1, 1), (1, 0), (0, 0)], 2)
 
+def plain_quad(name, x0, material):                                        # attributes without UVs: a flat quad at z = 30, facing +z
+    pos = bytearray(); nrm = bytearray()
+    c = [(x0, 0, 30), (x0 + 1, 0, 30), (x0 + 1, 1, 30), (x0, 1, 30)]
+    for i in (0, 1, 2, 0, 2, 3):
+        pos += struct.pack('<3f', *c[i]); nrm += struct.pack('<3f', 0, 0, 1)
+    first = len(accessors)
+    for data, mm in ((pos, ([x0, 0, 30], [x0 + 1, 1, 30])), (nrm, None)):
+        v = add_view(data)
+        acc = {'bufferView': v, 'componentType': 5126, 'count': 6, 'type': 'VEC3'}
+        if mm: acc['min'], acc['max'] = mm
+        accessors.append(acc)
+    meshes.append({'name': name, 'primitives': [{'attributes': {'POSITION': first, 'NORMAL': first + 1}, 'material': material, 'mode': 4}]})
+    nodes.append({'name': name, 'mesh': len(meshes) - 1})
+plain_quad('thin_glass_quad', 30.0, 3)
+plain_quad('thick_glass_quad', 32.0, 4)
+
 h = math.sqrt(0.5)
 nodes.append({'name': 'Area_Light', 'translation': [0.0, 5.0, 0.0], 'rotation': [-h, 0, 0, h],
               'extras': {'rt_light_type': 'rect', 'rt_size_x': 3.0, 'rt_size_y': 3.0, 'rt_radiance': 6.0}})
@@ -110,7 +133,8 @@ eye = (0.0, 3.2, 8.5)
 # camera looking at (0, 1.5, -4): pitch down by atan2(3.2 - 1.5, 12.5)
 pitch = -math.atan2(eye[1] - 1.5, eye[2] + 4)
 nodes.append({'name': 'Camera', 'camera': 0, 'translation': list(eye), 'rotation': [math.sin(pitch / 2), 0, 0, math.cos(pitch / 2)]})
-doc = {'asset': {'version': '2.0', 'generator': 'tools/make_texture_test.py'}, 'scene': 0, 'scenes': [{'nodes': list(range(len(nodes)))}],
+doc = {'extensionsUsed': ['KHR_materials_transmission', 'KHR_materials_ior'],
+       'asset': {'version': '2.0', 'generator': 'tools/make_texture_test.py'}, 'scene': 0, 'scenes': [{'nodes': list(range(len(nodes)))}],
        'nodes': nodes, 'meshes': meshes, 'materials': mats,
        'images': [{'bufferView': v, 'mimeType': 'image/png'} for v in image_views],
        'samplers': [{'magFilter': 9729, 'minFilter': 9729, 'wrapS': 10497, 'wrapT': 10497}],

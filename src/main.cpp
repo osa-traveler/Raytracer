@@ -12,7 +12,7 @@
 //   --preset NAME|FILE.json    load settings saved from the panel (presets/NAME.json, or a path); options after it override it, and a scene named on the command line always wins; the thread count is not part of a preset
 //   --no-textures      (ignore baseColor / metallicRoughness textures and use the material factors only; default: use them)
 //   --clamp-indirect X  --glossy-floor R  --glass-shadows   (less noise for a little accuracy, Path mode, all off by default:
-//                      clamp the radiance of paths with 2+ scatterings to X / give glossy surfaces seen by indirect light at least roughness R / shadow rays pass through glass)
+//                      clamp the radiance of paths with 2+ scatterings to X / give glossy surfaces seen by indirect light at least roughness R / shadow rays pass through thin glass, i.e. materials with the custom property rt_thin_glass)
 //   --no-normal-maps   (ignore normal maps, keep the other textures; default: use them)
 //   --cull-backfaces   (honour glTF doubleSided = false: the back of a one-sided surface is invisible to all rays; default off = every surface double sided)
 //   --light point|area  --light-size METRES   (area = soft shadows; point = the M0 baseline; size 0 = as in the glb)
