@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Renders the beetle from five directions with the ray tracer. Only the camera of Scene/Test/Beetle_Room_rear_tex.glb is replaced
 (position and rotation of its camera node), so Blender is not needed. Needs the glb (tools/export_beetle_room_textured.py) and
-build-release/raytrace. Usage, from the repository root: python3 experiments/2026-10-17_beetle-views/make_views.py [spp [views]]
-spp defaults to 256; views = the numbers of the views to render, e.g. 1 or 135 (default: all). With an spp other than 256 the files get an _<spp>spp suffix."""
+build-release/raytrace. Usage, from the repository root: python3 experiments/2026-10-17_beetle-views/make_views.py [spp [views [preset]]]
+spp defaults to 256; views = the numbers of the views to render, e.g. 1 or 135 (default: all). With an spp other than 256 the files get an _<spp>spp suffix.
+With a preset (presets/NAME.json, see src/preset.h) ALL the render settings and the display exposure / gamma come from the preset (spp is ignored), the files are
+written to best/ with the preset name as suffix, and only the camera of each view differs."""
 import json, math, struct, subprocess, sys
 
 SRC = "Scene/Test/Beetle_Room_rear_tex.glb"
 OUT = "experiments/2026-10-17_beetle-views/"
 SPP = sys.argv[1] if len(sys.argv) > 1 else "256"
 ONLY = sys.argv[2] if len(sys.argv) > 2 else "12345"
-TAG = "" if SPP == "256" else "_%sspp" % SPP
+PRESET = sys.argv[3] if len(sys.argv) > 3 else ""
+TAG = "_" + PRESET if PRESET else ("" if SPP == "256" else "_%sspp" % SPP)
+OUTDIR = OUT + ("best/" if PRESET else "")
 
 # The car in glTF coordinates (Y up), measured in Blender after the manual adjustment and converted with (x, y, z) -> (x, z, -y):
 # body centre, the direction of the front (engine -> body), the sideways direction, and the two glass spheres (centre, radius).
@@ -85,5 +89,9 @@ for name, ang, dist, height, yfov in VIEWS:
         f.write(struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(js) + len(rest)))
         f.write(struct.pack("<II", len(js), 0x4E4F534A) + js + rest)
     print(name, "camera at", [round(c, 2) for c in eye], flush=True)
-    subprocess.run(["./build-release/raytrace", glb, "--headless", "--integrator", "path", "--spp", SPP, "--jitter", "--max-depth", "8", "--rr",
-                    "--cull-backfaces", "--out", OUT + name + TAG, "--note", "beetle view " + name], check=True, stdout=subprocess.DEVNULL)
+    if PRESET:
+        cmd = ["./build-release/raytrace", glb, "--headless", "--preset", PRESET, "--out", OUTDIR + name + TAG, "--note", "beetle view " + name + ", preset " + PRESET]
+    else:
+        cmd = ["./build-release/raytrace", glb, "--headless", "--integrator", "path", "--spp", SPP, "--jitter", "--max-depth", "8", "--rr",
+               "--cull-backfaces", "--out", OUTDIR + name + TAG, "--note", "beetle view " + name]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)

@@ -9,6 +9,7 @@
 //   --accel none|median|sah  --no-ordered  --no-any-hit   (triangle search, default SAH; nearer child first; Path shadow rays stop at the first hit. All give the same image)
 //   --integrator classic|path  --env X  --no-nee  --no-mis  --rr   (path = Monte Carlo path tracing, --max-depth = bounces; --env = sky as light, default 0)
 //   --legacy-normals   (M0 behaviour at silhouettes: reproduces the M0 baseline images bit for bit)
+//   --preset NAME|FILE.json    load settings saved from the panel (presets/NAME.json, or a path); options after it override it, and a scene named on the command line always wins; the thread count is not part of a preset
 //   --no-textures      (ignore baseColor / metallicRoughness textures and use the material factors only; default: use them)
 //   --clamp-indirect X  --glossy-floor R  --glass-shadows   (less noise for a little accuracy, Path mode, all off by default:
 //                      clamp the radiance of paths with 2+ scatterings to X / give glossy surfaces seen by indirect light at least roughness R / shadow rays pass through glass)
@@ -31,6 +32,7 @@
 #include <cstdlib>
 
 #include "gui.h"
+#include "preset.h"
 #include "run_config.h"
 
 struct Options {
@@ -43,6 +45,7 @@ struct Options {
 
 static bool parseArgs(int argc, char** argv, Options& o) {
     RenderParams& p = o.gui.params;
+    std::string sceneOnCommandLine;                          // a scene named on the command line wins over the scene stored in a preset, whatever the order
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
@@ -78,6 +81,10 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--env" && (v = next())) p.envScale = (float)std::atof(v);
         else if (a == "--legacy-normals") p.legacyNormals = true;
         else if (a == "--cull-backfaces") p.cullBackfaces = true;
+        else if (a == "--preset" && (v = next())) {                       // settings saved from the panel (or written by hand); later options override it
+            std::string err;
+            if (!preset::load(preset::pathFor(v), p, o.gui.display, &err)) { std::fprintf(stderr, "preset: %s\n", err.c_str()); return false; }
+        }
         else if (a == "--no-textures") p.textures = false;
         else if (a == "--no-normal-maps") p.normalMaps = false;
         else if (a == "--clamp-indirect" && (v = next())) p.clampIndirect = (float)std::max(0.0, std::atof(v));
@@ -86,9 +93,10 @@ static bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--screenshot" && (v = next())) o.gui.screenshot = v;
         else if (a == "--screenshot-hover" && (v = next())) std::sscanf(v, "%f,%f", &o.gui.hoverX, &o.gui.hoverY);
         else if (a == "--gui-selftest" && (v = next())) o.gui.selfTest = v;
-        else if (a.rfind("--", 0) != 0) p.scene = a;
+        else if (a.rfind("--", 0) != 0) { p.scene = a; sceneOnCommandLine = a; }
         else { std::fprintf(stderr, "unknown or incomplete option: %s\n", a.c_str()); return false; }
     }
+    if (!sceneOnCommandLine.empty()) p.scene = sceneOnCommandLine;
     return true;
 }
 

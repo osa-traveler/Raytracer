@@ -64,3 +64,7 @@ experiments/2026-10-17_normal-map-convention/out/
 
 # beetle views: the per-view glbs (the camera is replaced in a copy of Beetle_Room_rear_tex.glb; make_views.py regenerates them)
 experiments/2026-10-17_beetle-views/out/
+
+# beetle views rendered with a preset: the PNGs are kept once, in docs/screenshots (the JSON with the settings and timings stays here)
+experiments/2026-10-17_beetle-views/best/*.png
+

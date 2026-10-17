@@ -5,6 +5,7 @@
 #include <random>
 
 #include "../src/imageio.h"
+#include "../src/preset.h"
 #include "../src/raytracer.h"
 #include "../src/render_job.h"
 
@@ -1985,6 +1986,100 @@ TEST(noise_switches_are_off_by_default) {
     CHECK(sc.clampIndirect == 0.0f && sc.glossyFloor == 0.0f && !sc.glassShadows);
     RenderParams p;
     CHECK(p.clampIndirect == 0.0f && p.glossyFloor == 0.0f && !p.glassShadows);
+}
+
+// ---- presets: named settings saved to / loaded from JSON
+
+static bool sameParams(const RenderParams& a, const RenderParams& b) {      // everything a preset stores (not threads, not envUniform)
+    return a.scene == b.scene && a.spp == b.spp && a.progressive == b.progressive && a.jitter == b.jitter && a.seed == b.seed && a.maxDepth == b.maxDepth &&
+           a.lightMode == b.lightMode && a.lightSize == b.lightSize && a.integrator == b.integrator && a.nee == b.nee && a.mis == b.mis &&
+           a.russianRoulette == b.russianRoulette && a.envScale == b.envScale && a.bsdf == b.bsdf && a.multiScatter == b.multiScatter && a.accel == b.accel &&
+           a.orderedTraversal == b.orderedTraversal && a.anyHitShadows == b.anyHitShadows && a.legacyNormals == b.legacyNormals && a.cullBackfaces == b.cullBackfaces &&
+           a.textures == b.textures && a.normalMaps == b.normalMaps && a.clampIndirect == b.clampIndirect && a.glossyFloor == b.glossyFloor && a.glassShadows == b.glassShadows;
+}
+
+static RenderParams unusualParams() {                                          // every stored field differs from its default
+    RenderParams p;
+    p.scene = "Scene/Test/Beetle \"quoted\" room.glb"; p.spp = 1024; p.progressive = true; p.jitter = true; p.seed = 123456789; p.maxDepth = 11;
+    p.lightMode = LightMode::Point; p.lightSize = 0.75f; p.integrator = Integrator::Path; p.nee = false; p.mis = false; p.russianRoulette = true; p.envScale = 0.5f;
+    p.bsdf = BsdfModel::Lambert; p.multiScatter = false; p.accel = Accel::Median; p.orderedTraversal = false; p.anyHitShadows = false; p.legacyNormals = true;
+    p.cullBackfaces = true; p.textures = false; p.normalMaps = false; p.clampIndirect = 7.5f; p.glossyFloor = 0.9f; p.glassShadows = true;
+    return p;
+}
+
+TEST(a_preset_round_trips_every_setting_and_leaves_the_thread_count_alone) {
+    const std::string path = "preset_test_roundtrip.json";
+    RenderParams p = unusualParams();
+    Display d; d.exposure = 2.5f; d.gamma = 1.8f;
+    std::string err;
+    CHECK(preset::save(path, p, d, "a note with \"quotes\"", &err));
+    RenderParams q; q.threads = 3;                                             // a machine setting that must not be touched
+    Display dq;
+    std::string note;
+    CHECK(preset::load(path, q, dq, &err, &note));
+    CHECK(sameParams(p, q));
+    CHECK(q.threads == 3);
+    CHECK(dq.exposure == 2.5f && dq.gamma == 1.8f);
+    CHECK(note == "a note with \"quotes\"");
+    // saving the defaults and loading them over unusual settings resets everything (a "reset" preset)
+    CHECK(preset::save(path, RenderParams{}, Display{}, "", &err));
+    RenderParams r = unusualParams(); Display dr; dr.exposure = 9; dr.gamma = 2.9f;
+    CHECK(preset::load(path, r, dr, &err));
+    CHECK(sameParams(r, RenderParams{}));
+    CHECK(dr.exposure == Display{}.exposure && dr.gamma == Display{}.gamma);
+    std::remove(path.c_str());
+}
+
+TEST(loading_a_preset_is_partial_clamped_and_all_or_nothing) {
+    const std::string path = "preset_test_partial.json";
+    auto write = [&](const char* text) { std::FILE* f = std::fopen(path.c_str(), "wb"); std::fputs(text, f); std::fclose(f); };
+    RenderParams base = unusualParams(); Display d;
+    std::string err;
+    write("{\"spp\": 77, \"some_future_key\": [1, 2, 3]}");                      // only spp; the unknown key is ignored
+    RenderParams a = base;
+    CHECK(preset::load(path, a, d, &err));
+    RenderParams expect = base; expect.spp = 77;
+    CHECK(sameParams(a, expect));
+    write("{\"spp\": -5, \"glossy_floor\": 5, \"clamp_indirect\": -1, \"max_depth\": 99, \"exposure\": 100, \"gamma\": 0}");   // out of range: clamped to the panel's ranges
+    RenderParams b = base; Display db;
+    CHECK(preset::load(path, b, db, &err));
+    CHECK(b.spp == 1 && b.glossyFloor == 1.0f && b.clampIndirect == 0.0f && b.maxDepth == 16 && db.exposure == 16.0f && db.gamma == 1.0f);
+    for (const char* bad : {"{\"spp\": \"many\"}", "{\"jitter\": 1}", "{\"integrator\": \"photon\"}", "{\"light\": 3}", "{\"spp\": 5, ", "[1, 2]", ""}) {   // wrong type, wrong name, broken JSON, not an object
+        write(bad);
+        RenderParams c = base; Display dc; dc.exposure = 3;
+        std::string e2;
+        CHECK(!preset::load(path, c, dc, &e2));
+        CHECK(!e2.empty());
+        CHECK(sameParams(c, base) && dc.exposure == 3);                           // nothing changed, not even the valid keys before the bad one
+    }
+    write("{\"spp\": 5, \"jitter\": 1}");                                          // a valid key BEFORE the bad one must not be applied either
+    RenderParams c = base; Display dc;
+    CHECK(!preset::load(path, c, dc, &err) && c.spp == base.spp);
+    RenderParams m = base; Display dm;
+    CHECK(!preset::load("preset_test_does_not_exist.json", m, dm, &err) && sameParams(m, base));
+    std::remove(path.c_str());
+}
+
+TEST(preset_names_become_safe_file_names_and_are_listed) {
+    CHECK(preset::sanitizeName("beetle final") == "beetle final");
+    CHECK(preset::sanitizeName("a/b\\c:d*e?f") == "a_b_c_d_e_f");
+    CHECK(preset::sanitizeName("../secret") == "_secret");                        // no way out of the presets folder
+    CHECK(preset::sanitizeName("  ..hidden  ") == "hidden");
+    CHECK(preset::sanitizeName("   ").empty() && preset::sanitizeName("...").empty());
+    CHECK(preset::sanitizeName("ビートル 1024spp") == "ビートル 1024spp");           // non-ASCII names are fine
+    CHECK(preset::pathFor("beetle") == "presets/beetle.json");
+    CHECK(preset::pathFor("a/b") == "a/b" && preset::pathFor("x.json") == "x.json" && preset::pathFor("dir\\x") == "dir\\x");   // a path is taken as it is
+    CHECK(preset::pathFor("../x y", "somewhere") == "../x y");
+    const std::string dir = "preset_test_dir";
+    std::filesystem::remove_all(dir);
+    CHECK(preset::list(dir).empty());                                              // a missing folder lists nothing
+    std::string err;
+    CHECK(preset::save(preset::pathFor("zeta", dir), RenderParams{}, Display{}, "", &err));        // creates the folder
+    CHECK(preset::save(preset::pathFor("alpha one", dir), RenderParams{}, Display{}, "", &err));
+    std::FILE* f = std::fopen((dir + "/not_a_preset.txt").c_str(), "wb"); std::fputs("x", f); std::fclose(f);
+    std::vector<std::string> names = preset::list(dir);
+    CHECK(names.size() == 2 && names[0] == "alpha one" && names[1] == "zeta");     // sorted, only .json
+    std::filesystem::remove_all(dir);
 }
 
 int main() {

@@ -8,6 +8,18 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 
 *このレンダラーの最新の描画。約47万三角形の空冷ビートル + ガラス球 2 個(パストレーシング、PBR、面光源の NEE + MIS、Russian Roulette、baseColor・metallicRoughness テクスチャ、256 spp、640x480、描画 52 s)。ビートルのモデルは CGTrader「VW Classic Bettle」(Royalty Free License)で、モデルのファイル自体はこのリポジトリに含めていません。条件・時間・Blender との比較は [experiments/2026-10-16_beetle/notes.md](experiments/2026-10-16_beetle/notes.md)。*
 
+## サンプル画像
+
+ビートルの 5 つの視点(プリセット [`presets/my-settings_best.json`](presets/my-settings_best.json) で描画。Path、PBR、面光源の NEE + MIS、**1024 spp**、シード 2、最大反射 6、面光源の一辺 1.01 m、空の光 0.1、間接光のクランプ 10、光沢面のぼかし 0.89、ガラスの影はオフ、露出 3.07、ガンマ 2.33、テクスチャ・法線マップあり、640x480、8 スレッド、1 枚あたり 240〜268 秒)。同じ設定は、`--preset my-settings_best` で再現できます(視点は、[`experiments/2026-10-17_beetle-views/`](experiments/2026-10-17_beetle-views/) の `make_views.py`)。
+
+| | |
+|---|---|
+| ![前方の斜め](docs/screenshots/2026-10-17_beetle-view1-front-three-quarter.png)<br>前方の斜め | ![側面](docs/screenshots/2026-10-17_beetle-view2-side.png)<br>側面(やや後ろ寄り) |
+| ![後方の斜め](docs/screenshots/2026-10-17_beetle-view3-rear-three-quarter.png)<br>後方の斜め | ![高い位置から](docs/screenshots/2026-10-17_beetle-view4-high-from-front.png)<br>高い位置から(前方) |
+| ![低い位置](docs/screenshots/2026-10-17_beetle-view5-low-front-close.png)<br>低い位置、前方に近い | |
+
+ビートルのモデルは、CGTrader「VW Classic Bettle」(Royalty Free License)です。モデルのファイル自体は、このリポジトリに含めていません。クランプと光沢面のぼかしは、わずかに偏りが入る設定です(解説: [docs/RENDERING_GUIDE.md](docs/RENDERING_GUIDE.md) 第14章)。窓ガラスの内側などに、細かい粒が少し残ります。
+
 ## 機能
 
 - GLB(glTF 2.0)ローダ(JSON パーサ・PNG デコーダも自前実装。外部ライブラリは SDL2 のみ)
@@ -25,7 +37,7 @@ Blender で作った glTF バイナリ(`.glb`)のシーンを読み込み、640x
 - モンテカルロ法: 再現性のある乱数(PCG32、ピクセルごとに独立。スレッド数によらず結果が同一)、1ピクセルのサンプル数(`--spp`)、ピクセル内のランダムな位置(ジッタ = アンチエイリアス)
 - 線形の浮動小数の film と、表示変換(露出・ガンマ)の分離。画像は PNG・PFM(線形)で保存、画像どうしの差(RMSE)を測れる
 - マルチスレッドで走査線ごとに描画し、描画の進行をウィンドウに表示
-- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(2182項目)、再現できる実験(`experiments/`)
+- 操作パネル(Dear ImGui)、画面なしの描画、設定・時間・レイ数を記録する JSON、テスト(2232項目)、再現できる実験(`experiments/`)
 
 ## ビルドと実行
 
@@ -49,6 +61,7 @@ cmake --build build-release
 - サンプル数、ジッタ、シード、スレッド数、最大反射回数、光源(点 / 面)と面光源の大きさ、シーンを変えて、**Render** ボタンで再描画します。**Cancel** で中断できます。
 - 露出とガンマは、再描画なしで、その場で画像に反映されます。
 - 各項目に、マウスを重ねると、**短い説明**(日本語)が出ます。
+- **プリセット**: パネルの一番上で、いまの設定に名前を付けて保存(`presets/名前.json`)、一覧から読み込めます。コマンドラインは `--preset 名前`(後ろのオプションが優先)。付属の例は `presets/` にあります。
 
 ![ホバー説明](docs/screenshots/2026-10-17_gui-tooltip.png)
 

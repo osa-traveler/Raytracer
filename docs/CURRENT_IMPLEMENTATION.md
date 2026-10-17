@@ -191,6 +191,14 @@ f = 拡散色 × (1 − Es(μo)) (1 − Es(μi)) / (π (1 − Ē))              
 - 白い炉(`--env-uniform 1`): 鏡 0.9996、ガラス 1.0000、金属(roughness 0.1〜1.0)0.998〜1.003、プラスチック 0.9987〜0.9999(`experiments/2026-10-16_m7-furnace/`)。
 - 検証(`tests/test_main.cpp`): フレネル、GGX の正規化・シャドウイング、VNDF の PDF が確率に一致、サンプリングの重みが数値積分と一致して 1 を超えない、全角度でのアルベド(プラスチック < 1.005)、相反性、材質のパラメータ(ローブの選択)、glTF の `ior` / `specular` の読み込み、白い炉(ガラス・鏡・粗い面・多重散乱)、スネルの法則、ガラス板越しの光のずれと減衰、鏡越しの光源、3方式の期待値の一致(光沢面・ガラス越し)、スレッド数への非依存。
 
+### プリセット(2026-10-17): 設定に名前を付けて保存・読み込み
+
+- `src/preset.h`。**設定パネルの一番上**に、名前の入力欄 + **Save preset**(`presets/名前.json` に保存。同じ名前は上書き)と、**load a preset...**(一覧から選ぶと、設定をパネルに読み込む。描画は Render で始まる。段階描画で「restart」がオンなら、自動で描き直す)。コマンドラインは **`--preset 名前` または `--preset ファイル.json`**(名前なら `presets/名前.json`。後ろのオプションが優先。**コマンドラインで指定したシーンは、順番によらず、プリセットの `scene` より優先**)。
+- **形式**: 人が読める JSON。`preset_version`(1)、`note`、`scene`、`spp`、`progressive`、`jitter`、`seed`、`max_depth`、`light`("point" / "area")、`light_size`、`integrator`("classic" / "path")、`nee`、`mis`、`russian_roulette`、`sky_light`、`bsdf`("lambert" / "pbr")、`multiple_scattering`、`accel`("none" / "median" / "sah")、`nearer_child_first`、`any_hit_shadows`、`legacy_normals`、`cull_backfaces`、`textures`、`normal_maps`、`clamp_indirect`、`glossy_floor`、`glass_shadows`、`exposure`、`gamma`。**保存しないもの**: スレッド数(マシンの性質)、白い炉の定数(テスト用)。
+- **読み込みの決まり**: ファイルにないキーは、現在の値のまま(部分的なプリセットが書ける)。知らないキーは無視。値は、パネルの範囲に丸める(例: `spp` は 1〜100000、`glossy_floor` は 0〜1)。**型が違う・名前が未知・JSON が壊れている・読めない場合は、エラーにして、何も変えない**(途中まで適用しない)。名前の `/ \ : * ? " < > |` は `_` に、先頭の `.` と空白は除く(`presets` フォルダの外に書けない)。日本語の名前も使える。
+- 付属の例: `presets/default.json`(すべて既定。読み込むとパネルが初期状態に戻る)、`presets/example-low-noise.json`(Path、1024 spp、ガラスの影 + クランプ 10 + 光沢面のぼかし 0.3。**調整していない例**で、`Beetle_Room_rear_tex.glb`(リポジトリにない)が要る)。自分のプリセットも `presets/` に作られるので、コミットするかは選べる。
+- テスト(2232 項目の一部): すべての設定が往復して一致(スレッド数は不変)、デフォルトのプリセットで元に戻る、部分的・丸め・「全部適用か何も変えないか」、名前の安全化と一覧。**わざとバグを入れて検出を確認**(6 件、すべて元に戻した): 保存の項目漏れ、丸めなし、先に適用してから検査(途中適用)、パス区切りを消さない、未知の名前を黙って受け入れる、型違いを黙って受け入れる。
+
 ### ノイズを減らす 3 つのスイッチ(2026-10-17、Path 方式、すべて既定はオフ)
 
 オフのときは、これまでの画像と**ビット単位で同じ**(ビートルの 256 spp の PFM がバイト単位で同一であることを確認)。解説は [RENDERING_GUIDE.md](RENDERING_GUIDE.md) の第14章。
@@ -237,7 +245,7 @@ f = 拡散色 × (1 − Es(μo)) (1 − Es(μi)) / (π (1 − Ē))              
 
 ## 11. テスト
 
-`./build-release/raytrace_tests`(または `ctest --test-dir build-release`)。2182項目、すべて成功(2026-10-17。ノイズ低減の 43 項目も追加。テクスチャの 59 項目と法線マップの 39 項目を追加。前日に追加した裏面の非表示は 82 項目で、わざとバグを入れて検出を確認済み)。テクスチャのテスト: PNG デコーダが、zlib 圧縮・全フィルタの PNG(`TextureTest.glb`)の全ピクセルを再現する、自前の非圧縮 PNG の往復と壊れた入力の拒否、双線形・repeat・sRGB を混ぜる前に線形化、ヒットの UV と `materialAt()` の値(市松と metallicRoughness)、`useTextures = false` で係数に戻る、テクスチャのないシーンの画像が不変、テクスチャが Path の画像に出る。**わざとバグを入れて検出を確認**(6 件): v の反転、roughness と metalness のチャンネルの入れ替え、baseColor を sRGB 変換しない、UV の重みの入れ替え、PNG の平均フィルタの丸め、repeat を clamp に変える(すべて元に戻した)。法線マップのテスト: 合成のシーン(`TextureTest.glb`)の左右の壁で、手の向き(-1 と +1)の両方で、`n'` が期待値に一致、幾何法線が不変、`useTextures = false` / `useNormalMaps = false` / `scale = 0` で元の法線に戻る、画像が変わる、法線マップのないシーンの画像が不変。**わざとバグを入れて検出を確認**(7 件): 手の向きを常に +1 にする、「上」を +dP/dv にする、緑チャンネルの反転、法線を (r,g,b) × 2 − 1 しない、`scale` の無視、bitangent に w を掛けない、dP/du と dP/dv の入れ替え(すべて元に戻した)。さらに、実物の Blender 製 4096x4096 PNG 3 枚(BaseColor・Roughness・Metalness)で、5 点ずつ Blender の値と**完全に一致**することを確認した(復号は 1 枚 60〜440 ms)。
+`./build-release/raytrace_tests`(または `ctest --test-dir build-release`)。2232項目、すべて成功(2026-10-17。プリセットの 50 項目、ノイズ低減の 43 項目も追加。テクスチャの 59 項目と法線マップの 39 項目を追加。前日に追加した裏面の非表示は 82 項目で、わざとバグを入れて検出を確認済み)。テクスチャのテスト: PNG デコーダが、zlib 圧縮・全フィルタの PNG(`TextureTest.glb`)の全ピクセルを再現する、自前の非圧縮 PNG の往復と壊れた入力の拒否、双線形・repeat・sRGB を混ぜる前に線形化、ヒットの UV と `materialAt()` の値(市松と metallicRoughness)、`useTextures = false` で係数に戻る、テクスチャのないシーンの画像が不変、テクスチャが Path の画像に出る。**わざとバグを入れて検出を確認**(6 件): v の反転、roughness と metalness のチャンネルの入れ替え、baseColor を sRGB 変換しない、UV の重みの入れ替え、PNG の平均フィルタの丸め、repeat を clamp に変える(すべて元に戻した)。法線マップのテスト: 合成のシーン(`TextureTest.glb`)の左右の壁で、手の向き(-1 と +1)の両方で、`n'` が期待値に一致、幾何法線が不変、`useTextures = false` / `useNormalMaps = false` / `scale = 0` で元の法線に戻る、画像が変わる、法線マップのないシーンの画像が不変。**わざとバグを入れて検出を確認**(7 件): 手の向きを常に +1 にする、「上」を +dP/dv にする、緑チャンネルの反転、法線を (r,g,b) × 2 − 1 しない、`scale` の無視、bitangent に w を掛けない、dP/du と dP/dv の入れ替え(すべて元に戻した)。さらに、実物の Blender 製 4096x4096 PNG 3 枚(BaseColor・Roughness・Metalness)で、5 点ずつ Blender の値と**完全に一致**することを確認した(復号は 1 枚 60〜440 ms)。
 
 - レイと三角形: 当たり(距離・重心座標)、外れ(外側、斜辺や辺のぎりぎり外)、平行、裏から(両面)、辺・頂点上、原点の後ろ(t < 0)。
 - シーンの交差: 最近傍の選択、`tmax` の制限、原点の後ろの無視。

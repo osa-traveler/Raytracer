@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 
+#include "preset.h"
 #include "run_config.h"
 
 namespace {
@@ -104,6 +105,9 @@ int runGui(const GuiOptions& opt) {
     std::vector<std::string> scenes = findScenes();
     int seedInput = (int)params.seed;
     std::string saveMessage;
+    char presetName[128] = "my-settings";
+    std::string presetMessage;
+    std::vector<std::string> presetNames = preset::list();
 
     RenderJob job;
     std::vector<uint32_t> fb(WIDTH * HEIGHT, 0xFF101010u);     // what the image area shows (ARGB8888)
@@ -264,6 +268,46 @@ int runGui(const GuiOptions& opt) {
         ImGui::SetNextWindowSize(ImVec2(kPanelW, kWindowH));
         ImGui::Begin("Controls", nullptr, fixed);
         const bool busy = job.busy();
+
+        ImGui::SeparatorText("Presets (named settings)");
+        ImGui::SetNextItemWidth(230);
+        ImGui::InputText("##presetname", presetName, sizeof presetName);
+        tip("設定に付ける名前。「Save preset」で、presets/名前.json に保存します(同じ名前は上書き)。",
+            "Name for the settings. Save preset writes presets/NAME.json (the same name is overwritten).");
+        ImGui::SameLine();
+        if (ImGui::Button("Save preset")) {
+            std::string nm = preset::sanitizeName(presetName);
+            if (nm.empty()) presetMessage = "type a name first";
+            else {
+                params.scene = scenePath;
+                params.seed = (uint64_t)std::max(0, seedInput);
+                std::string path = preset::pathFor(nm), err;
+                std::error_code ec;
+                bool existed = std::filesystem::exists(path, ec);
+                presetMessage = preset::save(path, params, disp, opt.note, &err) ? std::string(existed ? "overwrote " : "saved ") + path : err;
+            }
+        }
+        tip("下の設定(サンプル数、スイッチ、露出とガンマなど。スレッド数は除く)に名前を付けて保存します。ファイルを渡せば、別のマシンでも使えます。",
+            "Save the settings below (samples, switches, exposure and gamma, ...; not the thread count) under that name. The file can be copied to another machine.");
+        if (ImGui::BeginCombo("##loadpreset", "load a preset...")) {
+            presetNames = preset::list();                                 // look again each time the list is opened
+            if (presetNames.empty()) ImGui::TextDisabled("(no presets yet)");
+            for (const std::string& n : presetNames)
+                if (ImGui::Selectable(n.c_str())) {
+                    std::string path = preset::pathFor(n), err;
+                    if (preset::load(path, params, disp, &err)) {
+                        std::snprintf(scenePath, sizeof scenePath, "%s", params.scene.c_str());
+                        seedInput = (int)params.seed;
+                        std::snprintf(presetName, sizeof presetName, "%s", n.c_str());
+                        displayDirty = true;
+                        presetMessage = "loaded " + path + " (press Render to apply; progressive mode restarts by itself)";
+                    } else presetMessage = err;
+                }
+            ImGui::EndCombo();
+        }
+        tip("保存した設定を、パネルに読み込みます(ファイルにない項目は、そのまま)。描画は、「Render」で始まります(段階描画で「restart」がオンなら、自動で描き直します)。",
+            "Load saved settings into the panel (items missing from the file stay as they are). Rendering starts with Render (progressive mode with restart on starts by itself).");
+        if (!presetMessage.empty()) ImGui::TextWrapped("%s", presetMessage.c_str());
 
         ImGui::SeparatorText("Render settings (press Render to apply)");
         ImGui::InputText("scene", scenePath, sizeof scenePath);
